@@ -25,7 +25,12 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <lwip/udp.h>
+#include <lwip/debug.h>
 #include <string.h>
+
+#include "FreeRTOS.h"
+#include "task.h"
+#include "semphr.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -54,22 +59,36 @@ PCD_HandleTypeDef hpcd_USB_OTG_FS;
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityNormal1,
   .stack_size = 256 * 4
 };
 /* USER CODE BEGIN PV */
-
+osThreadId_t udp_reciever_task_handle;
+const osThreadAttr_t udp_reciever_task_attributes = {
+  .name = "UDP rec",
+  .priority = (osPriority_t) osPriorityNormal,
+  .stack_size = 256 * 4
+};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
+static void MPU_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USB_OTG_FS_PCD_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
-static void MPU_Config(void);
+//static void MPU_Config(void);
+void udp_reciever_task (void *argument);
+
+// UDP receiver functions and semaphores
+// void udp_echo_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, struct ip_addr *addr, u16_t port);
+void udp_echo_init(void);
+static SemaphoreHandle_t udp_led_recv_semphr = NULL;
+static SemaphoreHandle_t lwip_init_ready_semphr = NULL;
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -84,12 +103,15 @@ static void MPU_Config(void);
 int main(void)
 {
   /* USER CODE BEGIN 1 */
-  MPU_Config();
+  //MPU_Config();
   /* USER CODE END 1 */
 
 /* USER CODE BEGIN Boot_Mode_Sequence_0 */
   int32_t timeout;
 /* USER CODE END Boot_Mode_Sequence_0 */
+
+  /* MPU Configuration--------------------------------------------------------*/
+  MPU_Config();
 
   /* Enable I-Cache---------------------------------------------------------*/
   SCB_EnableICache();
@@ -146,12 +168,13 @@ Error_Handler();
   /* USER CODE BEGIN 2 */
   /*Configure GPIO pin for RED LED - NUCLEO LED3 on PB14*/
   GPIO_InitTypeDef GPIO_InitStruct;
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET);
-  GPIO_InitStruct.Pin = GPIO_PIN_14;
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14 | GPIO_PIN_0, GPIO_PIN_RESET);
+  GPIO_InitStruct.Pin = GPIO_PIN_14 | GPIO_PIN_0;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -179,6 +202,7 @@ Error_Handler();
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
+  udp_reciever_task_handle = osThreadNew(udp_reciever_task, NULL, &udp_reciever_task_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* Start scheduler */
@@ -368,52 +392,58 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-/**
-  * @brief  Configure the MPU attributes
-  * @param  None
-  * @retval None
-  */
-static void MPU_Config(void)
+void udp_reciever_task (void *argument)
 {
-  MPU_Region_InitTypeDef MPU_InitStruct;
+	udp_led_recv_semphr = xSemaphoreCreateBinary();
+	lwip_init_ready_semphr = xSemaphoreCreateBinary();
 
-  /* Disable the MPU */
-  HAL_MPU_Disable();
+	xSemaphoreTake (lwip_init_ready_semphr, portMAX_DELAY);
 
-  /* Configure the MPU attributes as Device not cacheable
-     for ETH DMA descriptors */
-  MPU_InitStruct.Enable = MPU_REGION_ENABLE;
-  MPU_InitStruct.BaseAddress = 0x30040000;
-  MPU_InitStruct.Size = MPU_REGION_SIZE_256B;
-  MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
-  MPU_InitStruct.IsBufferable = MPU_ACCESS_BUFFERABLE;
-  MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
-  MPU_InitStruct.IsShareable = MPU_ACCESS_NOT_SHAREABLE;
-  MPU_InitStruct.Number = MPU_REGION_NUMBER0;
-  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0;
-  MPU_InitStruct.SubRegionDisable = 0x00;
-  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_ENABLE;
+	udp_echo_init();
+	for(;;)
+	{
+		osDelay(80);
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+		xSemaphoreTake (udp_led_recv_semphr, portMAX_DELAY);
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+	}
+}
 
-  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+void udp_echo_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, struct ip_addr *addr, u16_t port)
+{
+	static BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-  /* Configure the MPU attributes as Normal Non Cacheable
-     for LwIP RAM heap which contains the Tx buffers */
-  MPU_InitStruct.Enable = MPU_REGION_ENABLE;
-  MPU_InitStruct.BaseAddress = 0x30044000;
-  MPU_InitStruct.Size = MPU_REGION_SIZE_16KB;
-  MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
-  MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
-  MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
-  MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
-  MPU_InitStruct.Number = MPU_REGION_NUMBER1;
-  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;
-  MPU_InitStruct.SubRegionDisable = 0x00;
-  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_ENABLE;
+	if (p != NULL) {
+        /* send received packet back to sender */
+        udp_sendto(pcb, p, addr, port);
+        /* free the pbuf */
+        pbuf_free(p);
 
-  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+        xSemaphoreGiveFromISR(udp_led_recv_semphr, &xHigherPriorityTaskWoken);
+    	portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
+    }
+}
 
-  /* Enable the MPU */
-  HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
+void udp_echo_init(void)
+{
+    struct udp_pcb * pcb;
+
+    /* get new pcb */
+    pcb = udp_new();
+    if (pcb == NULL) {
+        LWIP_DEBUGF(UDP_DEBUG, ("udp_new failed!\n"));
+        return;
+    }
+
+    /* bind to any IP address on port 7 */
+    if (udp_bind(pcb, IP_ADDR_ANY, 7) != ERR_OK) {
+        LWIP_DEBUGF(UDP_DEBUG, ("udp_bind failed!\n"));
+        return;
+    }
+
+    /* set udp_echo_recv() as callback function
+       for received packets */
+    udp_recv(pcb, udp_echo_recv, NULL);
 }
 /* USER CODE END 4 */
 
@@ -429,8 +459,12 @@ void StartDefaultTask(void *argument)
   /* init code for LWIP */
   MX_LWIP_Init();
   /* USER CODE BEGIN 5 */
-  const char* message = "Hello UDP message!\n\r";
-
+  const char* str_message = "UDP MSG number: ";
+  const char* end_message = "- MSG sent from NUCLEO\n\r";
+  static uint32_t msg_counter = 0;
+  size_t str_size;
+  char num_message[10] = {0};
+  char *message;
   osDelay(1000);
 
   ip_addr_t PC_IPADDR;
@@ -439,23 +473,78 @@ void StartDefaultTask(void *argument)
   struct udp_pcb* my_udp = udp_new();
   udp_connect(my_udp, &PC_IPADDR, 55151);
   struct pbuf* udp_buffer = NULL;
+  xSemaphoreGive(lwip_init_ready_semphr);
+  message = pvPortMalloc( (strlen(str_message)) + (strlen(end_message)) +10);
 
   /* Infinite loop */
   for (;;) {
+	msg_counter++;
+	str_size = sprintf(num_message, "%lx", msg_counter);
+
+	strcat(message, str_message);
+	strcat(message, num_message);
+	strcat(message, end_message);
+
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
     osDelay(920);
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET);
-    osDelay(80);
     udp_buffer = pbuf_alloc(PBUF_TRANSPORT, strlen(message), PBUF_RAM);
-    if (udp_buffer != NULL) {
+    if (udp_buffer != NULL)
+    {
       memcpy(udp_buffer->payload, message, strlen(message));
       udp_send(my_udp, udp_buffer);
       pbuf_free(udp_buffer);
+
     }
+    osDelay(80);
+    //vPortFree(message);
+    *message = '\0';
   }
   /* USER CODE END 5 */
 }
 
+/* MPU Configuration */
+
+void MPU_Config(void)
+{
+  MPU_Region_InitTypeDef MPU_InitStruct = {0};
+
+  /* Disables the MPU */
+  HAL_MPU_Disable();
+  /** Initializes and configures the Region and the memory to be protected
+  */
+  MPU_InitStruct.Enable = MPU_REGION_ENABLE;
+  MPU_InitStruct.Number = MPU_REGION_NUMBER0;
+  MPU_InitStruct.BaseAddress = 0x30040000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_32KB;
+  MPU_InitStruct.SubRegionDisable = 0x0;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;
+  MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
+  MPU_InitStruct.IsShareable = MPU_ACCESS_NOT_SHAREABLE;
+  MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+  /** Initializes and configures the Region and the memory to be protected
+  */
+  MPU_InitStruct.Enable = MPU_REGION_ENABLE;
+  MPU_InitStruct.Number = MPU_REGION_NUMBER1;
+  MPU_InitStruct.BaseAddress = 0x30040000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_256B;
+  MPU_InitStruct.SubRegionDisable = 0x0;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0;
+  MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
+  MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
+  MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_BUFFERABLE;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+  /* Enables the MPU */
+  HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
+
+}
 /**
   * @brief  Period elapsed callback in non blocking mode
   * @note   This function is called  when TIM7 interrupt took place, inside
@@ -485,7 +574,7 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
-
+  for(;;);
   /* USER CODE END Error_Handler_Debug */
 }
 
