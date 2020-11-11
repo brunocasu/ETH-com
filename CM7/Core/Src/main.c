@@ -27,6 +27,7 @@
 #include <lwip/udp.h>
 #include <lwip/debug.h>
 #include <string.h>
+#include <tcp_echoserver.h>
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -69,6 +70,13 @@ const osThreadAttr_t udp_reciever_task_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
   .stack_size = 256 * 4
 };
+
+osThreadId_t tcp_task_handle;
+const osThreadAttr_t tcp_task_attributes = {
+  .name = "TCP",
+  .priority = (osPriority_t) osPriorityNormal,
+  .stack_size = 256 * 8
+};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -88,6 +96,9 @@ void udp_reciever_task (void *argument);
 void udp_echo_init(void);
 static SemaphoreHandle_t udp_led_recv_semphr = NULL;
 static SemaphoreHandle_t lwip_init_ready_semphr = NULL;
+
+void tcp_task (void *argument); // Initialize tcp_echoserver
+
 
 /* USER CODE END PFP */
 
@@ -166,7 +177,7 @@ Error_Handler();
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
   /* USER CODE BEGIN 2 */
-  /*Configure GPIO pin for RED LED - NUCLEO LED3 on PB14*/
+  /*Configure GPIO pin for RED LED and GREEN LED - NUCLEO LED3 on PB14*/
   GPIO_InitTypeDef GPIO_InitStruct;
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14 | GPIO_PIN_0, GPIO_PIN_RESET);
   GPIO_InitStruct.Pin = GPIO_PIN_14 | GPIO_PIN_0;
@@ -175,6 +186,10 @@ Error_Handler();
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
+  __HAL_RCC_GPIOE_CLK_ENABLE();
+  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_1, GPIO_PIN_RESET);
+  GPIO_InitStruct.Pin = GPIO_PIN_1;
+  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -203,6 +218,9 @@ Error_Handler();
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   udp_reciever_task_handle = osThreadNew(udp_reciever_task, NULL, &udp_reciever_task_attributes);
+  tcp_task_handle = osThreadNew(tcp_task, NULL, &tcp_task_attributes);
+
+  MX_LWIP_Init();
   /* USER CODE END RTOS_THREADS */
 
   /* Start scheduler */
@@ -436,7 +454,7 @@ void udp_echo_init(void)
     }
 
     /* bind to any IP address on port 7 */
-    if (udp_bind(pcb, IP_ADDR_ANY, 7) != ERR_OK) {
+    if (udp_bind(pcb, IP_ADDR_ANY, 7777) != ERR_OK) {
         LWIP_DEBUGF(UDP_DEBUG, ("udp_bind failed!\n"));
         return;
     }
@@ -444,6 +462,19 @@ void udp_echo_init(void)
     /* set udp_echo_recv() as callback function
        for received packets */
     udp_recv(pcb, udp_echo_recv, NULL);
+}
+
+void tcp_task (void *argument)
+{
+	tcp_echoserver_init();
+
+	for(;;)
+	{
+		HAL_GPIO_TogglePin(GPIOE, GPIO_PIN_1);
+		osDelay(500);
+	}
+
+
 }
 /* USER CODE END 4 */
 
@@ -457,7 +488,6 @@ void udp_echo_init(void)
 void StartDefaultTask(void *argument)
 {
   /* init code for LWIP */
-  MX_LWIP_Init();
   /* USER CODE BEGIN 5 */
   const char* str_message = "UDP MSG number: ";
   const char* end_message = "- MSG sent from NUCLEO\n\r";
@@ -468,7 +498,7 @@ void StartDefaultTask(void *argument)
   osDelay(1000);
 
   ip_addr_t PC_IPADDR;
-  IP_ADDR4(&PC_IPADDR, 192, 168, 1, 100);
+  IP_ADDR4(&PC_IPADDR, 192, 168, 1, 101);
 
   struct udp_pcb* my_udp = udp_new();
   udp_connect(my_udp, &PC_IPADDR, 55151);
@@ -486,7 +516,7 @@ void StartDefaultTask(void *argument)
 	strcat(message, end_message);
 
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
-    osDelay(920);
+    osDelay(30000); // 1 message sent every 30 seconds
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET);
     udp_buffer = pbuf_alloc(PBUF_TRANSPORT, strlen(message), PBUF_RAM);
     if (udp_buffer != NULL)

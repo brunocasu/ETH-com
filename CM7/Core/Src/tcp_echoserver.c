@@ -81,7 +81,7 @@ void tcp_echoserver_init(void)
 {
   /* create new tcp pcb */
   tcp_echoserver_pcb = tcp_new();
-
+  int k = 0;
   if (tcp_echoserver_pcb != NULL)
   {
     err_t err;
@@ -102,6 +102,12 @@ void tcp_echoserver_init(void)
       /* deallocate the pcb */
       memp_free(MEMP_TCP_PCB, tcp_echoserver_pcb);
     }
+  }
+  else
+  {
+	  k = MEMP_NUM_SYS_TIMEOUT;
+	  while (1); // tcp_new() returning NULL pointer
+
   }
 }
 
