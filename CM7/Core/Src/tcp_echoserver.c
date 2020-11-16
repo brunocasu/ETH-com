@@ -220,12 +220,17 @@ static err_t tcp_echoserver_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p
     /* store reference to incoming pbuf (chain) */
     es->p = p;
     
+    /**** capture the data from the package to be sent via serial interface *****/
+    tcp_pbuf_to_serial(p);
+
     /* initialize LwIP tcp_sent callback function */
     tcp_sent(tpcb, tcp_echoserver_sent);
     
     /* send back the received data (echo) */
     tcp_echoserver_send(tpcb, es);
     
+
+
     ret_err = ERR_OK;
   }
   else if (es->state == ES_RECEIVED)
@@ -235,6 +240,9 @@ static err_t tcp_echoserver_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p
     {
       es->p = p;
   
+      /**** capture the data from the package to be sent via serial interface *****/
+      tcp_pbuf_to_serial(p);
+
       /* send back received data */
       tcp_echoserver_send(tpcb, es);
     }

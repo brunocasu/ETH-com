@@ -77,6 +77,13 @@ const osThreadAttr_t tcp_task_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
   .stack_size = 256 * 8
 };
+
+osThreadId_t send_char_task_handle;
+const osThreadAttr_t send_char_task_attributes = {
+  .name = "send char",
+  .priority = (osPriority_t) osPriorityNormal,
+  .stack_size = 256 * 4
+};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -98,8 +105,11 @@ static SemaphoreHandle_t udp_led_recv_semphr = NULL;
 static SemaphoreHandle_t lwip_init_ready_semphr = NULL;
 
 void tcp_task (void *argument); // Initialize tcp_echoserver
+char* tcp_data;
+uint16_t tcp_data_size;
+static SemaphoreHandle_t serial_send_release_semphr = NULL;
 
-
+void send_char_task(void *argument);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -219,7 +229,7 @@ Error_Handler();
   /* add threads, ... */
   udp_reciever_task_handle = osThreadNew(udp_reciever_task, NULL, &udp_reciever_task_attributes);
   tcp_task_handle = osThreadNew(tcp_task, NULL, &tcp_task_attributes);
-
+  send_char_task_handle = osThreadNew(send_char_task, NULL, &send_char_task_attributes);
   MX_LWIP_Init();
   /* USER CODE END RTOS_THREADS */
 
@@ -466,14 +476,63 @@ void udp_echo_init(void)
 
 void tcp_task (void *argument)
 {
+	char skip_line = 0x0A;
+	char carriage_return = 0x0D;
+	char err = 'f';
 	tcp_echoserver_init();
-
+	serial_send_release_semphr = xSemaphoreCreateBinary();
 	for(;;)
 	{
-		HAL_GPIO_TogglePin(GPIOE, GPIO_PIN_1);
-		osDelay(500);
+		HAL_GPIO_WritePin(GPIOE, GPIO_PIN_1, GPIO_PIN_SET);
+		xSemaphoreTake ( serial_send_release_semphr, portMAX_DELAY );
+		HAL_GPIO_WritePin(GPIOE, GPIO_PIN_1, GPIO_PIN_RESET);
+		if (tcp_data_size > 0)
+		{
+			for (int k = 0; k<tcp_data_size; k++)
+				HAL_UART_Transmit(&huart3, &tcp_data[k], 1, 1000);
+
+			vPortFree(tcp_data);
+			HAL_UART_Transmit(&huart3, &carriage_return, 1, 1000);
+			tcp_data_size = 0;
+		}
+		else
+			HAL_UART_Transmit(&huart3, &err, 1, 1000);
+
 	}
 
+
+}
+
+void tcp_pbuf_to_serial (struct pbuf* p)
+{
+	static BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+	char* buff_ptr;
+
+	tcp_data_size = p->len;
+	if (tcp_data_size > 0)
+	{
+		tcp_data = pvPortMalloc(tcp_data_size);
+		buff_ptr = (char*)p->payload;
+	}
+
+	for (int i = 0; i<tcp_data_size; i++)
+	{
+		tcp_data[i] = buff_ptr[i];
+	}
+	xSemaphoreGiveFromISR(serial_send_release_semphr, &xHigherPriorityTaskWoken);
+	portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
+
+}
+
+void send_char_task(void *argument)
+{
+	char test = 'A';
+	for (;;)
+	{
+
+		//HAL_UART_Transmit(&huart3, &test, 1, 1000);
+		osDelay(2000);
+	}
 
 }
 /* USER CODE END 4 */
@@ -529,6 +588,7 @@ void StartDefaultTask(void *argument)
     osDelay(80);
     //vPortFree(message);
     *message = '\0';
+    //vPortFree(message);
   }
   /* USER CODE END 5 */
 }

@@ -31,5 +31,6 @@
 #define __TCP_ECHOSERVER_H__
 
 void tcp_echoserver_init(void);
+void tcp_pbuf_to_serial (struct pbuf* p);
 
 #endif /* __TCP_ECHOSERVER */
