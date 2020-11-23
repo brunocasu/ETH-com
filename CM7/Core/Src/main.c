@@ -63,26 +63,48 @@ const osThreadAttr_t defaultTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
   .stack_size = 256 * 4
 };
+
 /* USER CODE BEGIN PV */
-osThreadId_t udp_reciever_task_handle;
-const osThreadAttr_t udp_reciever_task_attributes = {
-  .name = "UDP rec",
-  .priority = (osPriority_t) osPriorityNormal,
+osThreadId_t udp_timer_message_task_handle;
+const osThreadAttr_t udp_timer_message_task_attributes = {
+  .name = "UDP timer",
+  .priority = (osPriority_t) osPriorityNormal1,
   .stack_size = 256 * 4
 };
 
-osThreadId_t tcp_task_handle;
-const osThreadAttr_t tcp_task_attributes = {
-  .name = "TCP",
-  .priority = (osPriority_t) osPriorityNormal,
-  .stack_size = 256 * 8
+osThreadId_t udp_echo_task_handle;
+const osThreadAttr_t udp_echo_task_attributes = {
+  .name = "UDP echo",
+  .priority = (osPriority_t) osPriorityNormal1,
+  .stack_size = 256 * 4
 };
 
-osThreadId_t send_char_task_handle;
-const osThreadAttr_t send_char_task_attributes = {
-  .name = "send char",
-  .priority = (osPriority_t) osPriorityNormal,
+osThreadId_t telnet_receiver_task_handle;
+const osThreadAttr_t telnet_receiver_task_attributes = {
+  .name = "TCP receiver",
+  .priority = (osPriority_t) osPriorityNormal1,
   .stack_size = 256 * 4
+};
+
+osThreadId_t telnet_transmitter_task_handle;
+const osThreadAttr_t telnet_transmitter_task_attributes = {
+  .name = "TCP transmitter",
+  .priority = (osPriority_t) osPriorityNormal1,
+  .stack_size = 256 * 4
+};
+
+osThreadId_t led_tx_task_handle;
+const osThreadAttr_t led_tx_task_attributes = {
+  .name = "GreenLED",
+  .priority = (osPriority_t) osPriorityNormal,
+  .stack_size = 128 * 4
+};
+
+osThreadId_t led_rx_task_handle;
+const osThreadAttr_t led_rx_task_attributes = {
+  .name = "OrangeLED",
+  .priority = (osPriority_t) osPriorityNormal,
+  .stack_size = 128 * 4
 };
 /* USER CODE END PV */
 
@@ -95,19 +117,46 @@ static void MX_USB_OTG_FS_PCD_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
-//static void MPU_Config(void);
-void udp_reciever_task (void *argument);
+
+// Task Functions
+void udp_timer_message_task(void *argument);
+void udp_echo_task(void *argument);
+void telnet_receiver_task(void *argument);
+void telnet_transmitter_task(void *argument);
+void led_tx_task(void *argument);
+void led_rx_task(void *argument);
+
+// UDP mesage strucutre
+typedef struct{
+  struct udp_pcb* udp_buff;
+  struct pbuf* p_ptr
+  struct ip_addr* ip_addr_ptr
+  uint16_t port_n
+} udp_echo_t;
+
+struct udp_echo_t msg_from_isr;   
+
+
+// Flags for LED behaivior
+static SemaphoreHandle_t led_tx_semphr = NULL;
+static SemaphoreHandle_t led_rx_semphr = NULL;
+
+static SemaphoreHandle_t serial_send_release_semphr = NULL;
+
+static err_t telnet_accept_callback (void *arg, struct tcp_pcb *newpcb, err_t err);
+static err_t telnet_receiver_callback (void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err);
+static err_t telnet_rx_err_callback (void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err);
 
 // UDP receiver functions and semaphores
 // void udp_echo_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, struct ip_addr *addr, u16_t port);
 void udp_echo_init(void);
 static SemaphoreHandle_t udp_led_recv_semphr = NULL;
-static SemaphoreHandle_t lwip_init_ready_semphr = NULL;
+// static SemaphoreHandle_t lwip_init_ready_semphr = NULL;
 
 void tcp_task (void *argument); // Initialize tcp_echoserver
 char* tcp_data;
 uint16_t tcp_data_size;
-static SemaphoreHandle_t serial_send_release_semphr = NULL;
+
 
 void send_char_task(void *argument);
 /* USER CODE END PFP */
@@ -124,7 +173,7 @@ void send_char_task(void *argument);
 int main(void)
 {
   /* USER CODE BEGIN 1 */
-  //MPU_Config();
+  
   /* USER CODE END 1 */
 
 /* USER CODE BEGIN Boot_Mode_Sequence_0 */
@@ -160,23 +209,23 @@ int main(void)
 
   /* Configure the system clock */
   SystemClock_Config();
-/* USER CODE BEGIN Boot_Mode_Sequence_2 */
-/* When system initialization is finished, Cortex-M7 will release Cortex-M4 by means of
-HSEM notification */
-/*HW semaphore Clock enable*/
-__HAL_RCC_HSEM_CLK_ENABLE();
-/*Take HSEM */
-HAL_HSEM_FastTake(HSEM_ID_0);
-/*Release HSEM in order to notify the CPU2(CM4)*/
-HAL_HSEM_Release(HSEM_ID_0,0);
-/* wait until CPU2 wakes up from stop mode */
-timeout = 0xFFFF;
-while((__HAL_RCC_GET_FLAG(RCC_FLAG_D2CKRDY) == RESET) && (timeout-- > 0));
-if ( timeout < 0 )
-{
-Error_Handler();
-}
-/* USER CODE END Boot_Mode_Sequence_2 */
+  /* USER CODE BEGIN Boot_Mode_Sequence_2 */
+  /* When system initialization is finished, Cortex-M7 will release Cortex-M4 by means of
+  HSEM notification */
+  /*HW semaphore Clock enable*/
+  __HAL_RCC_HSEM_CLK_ENABLE();
+  /*Take HSEM */
+  HAL_HSEM_FastTake(HSEM_ID_0);
+  /*Release HSEM in order to notify the CPU2(CM4)*/
+  HAL_HSEM_Release(HSEM_ID_0,0);
+  /* wait until CPU2 wakes up from stop mode */
+  timeout = 0xFFFF;
+  while((__HAL_RCC_GET_FLAG(RCC_FLAG_D2CKRDY) == RESET) && (timeout-- > 0));
+  if ( timeout < 0 )
+  {
+  Error_Handler();
+  }
+  /* USER CODE END Boot_Mode_Sequence_2 */
 
   /* USER CODE BEGIN SysInit */
 
@@ -186,8 +235,10 @@ Error_Handler();
   MX_GPIO_Init();
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
+  
   /* USER CODE BEGIN 2 */
-  /*Configure GPIO pin for RED LED and GREEN LED - NUCLEO LED3 on PB14*/
+  
+  // PB0 - GREEN LED / PB14 - RED LED
   GPIO_InitTypeDef GPIO_InitStruct;
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14 | GPIO_PIN_0, GPIO_PIN_RESET);
   GPIO_InitStruct.Pin = GPIO_PIN_14 | GPIO_PIN_0;
@@ -196,6 +247,7 @@ Error_Handler();
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
+  // PE1 - ORANGE LED
   __HAL_RCC_GPIOE_CLK_ENABLE();
   HAL_GPIO_WritePin(GPIOE, GPIO_PIN_1, GPIO_PIN_RESET);
   GPIO_InitStruct.Pin = GPIO_PIN_1;
@@ -211,6 +263,9 @@ Error_Handler();
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
+  led_tx_semphr = xSemaphoreCreateBinary();
+  led_rx_semphr = xSemaphoreCreateBinary();
+  serial_send_release_semphr = xSemaphoreCreateBinary();
   /* USER CODE END RTOS_SEMAPHORES */
 
   /* USER CODE BEGIN RTOS_TIMERS */
@@ -227,9 +282,18 @@ Error_Handler();
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
-  udp_reciever_task_handle = osThreadNew(udp_reciever_task, NULL, &udp_reciever_task_attributes);
-  tcp_task_handle = osThreadNew(tcp_task, NULL, &tcp_task_attributes);
-  send_char_task_handle = osThreadNew(send_char_task, NULL, &send_char_task_attributes);
+  udp_timer_message_task_handle = osThreadNew(udp_timer_message_task, NULL, &udp_timer_message_task_attributes);
+  udp_echo_task_handle = osThreadNew(udp_echo_task, NULL, &udp_echo_task_attributes);
+  telnet_receiver_task_handle = osThreadNew(telnet_receiver_task, NULL, &telnet_receiver_task_attributes);
+  telnet_transmitter_task_handle = osThreadNew(telnet_transmitter_task, NULL, &telnet_transmitter_task_attributes);
+  led_tx_task_handle = osThreadNew(led_tx_task, NULL, &led_tx_task_attributes);
+  led_rx_task_handle = osThreadNew(led_rx_task, NULL, &led_rx_task_attributes);
+
+  // udp_reciever_task_handle = osThreadNew(udp_reciever_task, NULL, &udp_reciever_task_attributes);
+  // tcp_task_handle = osThreadNew(tcp_task, NULL, &tcp_task_attributes);
+  // send_char_task_handle = osThreadNew(send_char_task, NULL, &send_char_task_attributes);
+  
+  // Start LwIP
   MX_LWIP_Init();
   /* USER CODE END RTOS_THREADS */
 
@@ -420,75 +484,169 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-void udp_reciever_task (void *argument)
+/**
+ * @brief Sends UDP messages with an aproximate interval of 1s (the value of the timer is sent in the data)
+ * @param none
+ * @retval none
+ */
+void udp_timer_message_task(void *argument)
 {
-	udp_led_recv_semphr = xSemaphoreCreateBinary();
-	lwip_init_ready_semphr = xSemaphoreCreateBinary();
+  const char* begin_message = "Time of operation "; // hh:mm:ss
+  const char* end_message = "- UDP message sent from NUCLEO Board\n\r";
+  const char* separation = ":";
+  static int hour = 0;
+  char h_char[10] = {0};
+  static int minute = 0;
+  char m_char[2] = {0};
+  static int second = 0;
+  char s_char[2] = {0};
+  char *message;
+  message = pvPortMalloc( (strlen(begin_message)) + (strlen(end_message)) +20);
+  
+  ip_addr_t PC_IPADDR;
+  // Set IP addr for the target
+  IP_ADDR4(&PC_IPADDR, 192, 168, 1, 101);
+  // Create new UDP connection
+  struct udp_pcb* my_udp = udp_new();
+  udp_connect(my_udp, &PC_IPADDR, 55151); // Messages transmitted at PORT 55151
+  struct pbuf* udp_buffer = NULL;
+  
+  for (;;)
+  {
+    if (second < 60) {second++;}
+    else {second == 0; minute++;}
+	
+    if (minute == 60) {minute == 0; hour++;}
 
-	xSemaphoreTake (lwip_init_ready_semphr, portMAX_DELAY);
+    sprintf(h_char, "%ld", hour);
+    sprintf(m_char, "%ld", minute);
+    sprintf(s_char, "%ld", second);
+    // Assemble message to be transmitted
+    strcat(message, str_message);
+    strcat(message, h_char);
+    strcat(message, separation);
+    strcat(message, m_char);
+    strcat(message, separation);
+    strcat(message, s_char);
+    strcat(message, end_message);    
+    
+    udp_buffer = pbuf_alloc(PBUF_TRANSPORT, strlen(message), PBUF_RAM);
+    if (udp_buffer != NULL)
+    {
+      memcpy(udp_buffer->payload, message, strlen(message));
+      udp_send(my_udp, udp_buffer);
+      pbuf_free(udp_buffer);
 
-	udp_echo_init();
-	for(;;)
-	{
-		osDelay(80);
-		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
-		xSemaphoreTake (udp_led_recv_semphr, portMAX_DELAY);
-		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-	}
+    }
+    osDelay(999); // 0.999 seconds delay to compensate time to send the message
+    *message = '\0'; // clear the array for the next text addition
+  }
 }
 
-void udp_echo_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, struct ip_addr *addr, u16_t port)
+/**
+ * @brief Create UDP Binding on any IP in Port 7777. Echoes all the messages sent in that port.
+ * @param none
+ * @retval none
+ */
+void udp_echo_task(void *argument)
+{
+  struct udp_pcb * pcb;
+  
+  pcb = udp_new();
+  if (pcb==NULL)
+  {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+    while(1);
+  }
+  
+  err_t bind_ret_val = udp_bind(pcb, IP_ADDR_ANY, 7777) 
+  if (bind_ret_val != ERR_OK)
+  {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+    while(1);
+  }
+  
+  // Set UDP receiver with a callback function
+  udp_recv(pcb, udp_recv_callback, NULL);
+  
+  for(;;)
+  {
+    xSemaphoreTake (udp_led_recv_semphr, portMAX_DELAY);
+    // Return form the ISR. Send received message back (echo)
+    udp_sendto(msg_from_isr.udp_buff, msg_from_isr.p_ptr, msg_from_isr.ip_addr_ptr, msg_from_isr.port);
+  }
+}
+
+/**
+ * @brief UDP callback function for Receiver Mode
+ * 
+ */
+void udp_recv_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p, struct ip_addr *addr, u16_t port)
 {
 	static BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+	if (p != NULL)
+  {
+    // Retrieve UDP msg from the ISR
+    msg_from_isr.udp_buff = pcb;
+    msg_from_isr.p_ptr = p;
+    msg_from_isr.ip_addr_ptr = addr;
+    msg_from_isr.port;
+    // Free Data Pointer
+    pbuf_free(p);
 
-	if (p != NULL) {
-        /* send received packet back to sender */
-        udp_sendto(pcb, p, addr, port);
-        /* free the pbuf */
-        pbuf_free(p);
-
-        xSemaphoreGiveFromISR(udp_led_recv_semphr, &xHigherPriorityTaskWoken);
-    	portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
-    }
+    xSemaphoreGiveFromISR(udp_led_recv_semphr, &xHigherPriorityTaskWoken);
+    portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
+  }
 }
 
-void udp_echo_init(void)
+/**
+ * 
+ * 
+ * 
+ * 
+ */
+void telnet_receiver_task (void *argument)
 {
-    struct udp_pcb * pcb;
-
-    /* get new pcb */
-    pcb = udp_new();
-    if (pcb == NULL) {
-        LWIP_DEBUGF(UDP_DEBUG, ("udp_new failed!\n"));
-        return;
-    }
-
-    /* bind to any IP address on port 7 */
-    if (udp_bind(pcb, IP_ADDR_ANY, 7777) != ERR_OK) {
-        LWIP_DEBUGF(UDP_DEBUG, ("udp_bind failed!\n"));
-        return;
-    }
-
-    /* set udp_echo_recv() as callback function
-       for received packets */
-    udp_recv(pcb, udp_echo_recv, NULL);
-}
-
-void tcp_task (void *argument)
-{
-	char skip_line = 0x0A;
+	// char skip_line = 0x0A;
 	char carriage_return = 0x0D;
 	char err = 'f';
-	tcp_echoserver_init();
-	serial_send_release_semphr = xSemaphoreCreateBinary();
-	for(;;)
+	
+	static struct tcp_pcb* telnet_recv_pcb;
+    
+  telnet_recv_pcb = tcp_new();
+	if (telnet_recv_pcb == NULL)
+  {
+    // tcp_new() returned NULL pointer
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+    while(1);
+  }
+  
+  // telnet connection binding at PORT 23
+  err_t ret_val = tcp_bind(telnet_recv_pcb, IP_ADDR_ANY, 23);
+  if (ret_val == ERR_OK)
+  {
+    // binding failed
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+    memp_free(MEMP_TCP_PCB, telnet_bind_ret_val);
+    while(1);
+  }
+  
+
+  telnet_recv_pcb = tcp_listen(telnet_recv_pcb);
+  
+  // set TCP accept callback function for Receiver Mode
+  tcp_accept(telnet_recv_pcb, telnet_accept_callback);
+  
+  for(;;)
 	{
-		HAL_GPIO_WritePin(GPIOE, GPIO_PIN_1, GPIO_PIN_SET);
-		xSemaphoreTake ( serial_send_release_semphr, portMAX_DELAY );
-		HAL_GPIO_WritePin(GPIOE, GPIO_PIN_1, GPIO_PIN_RESET);
-		if (tcp_data_size > 0)
+		// Block until receive TCP pkt
+    xSemaphoreTake ( serial_send_release_semphr, portMAX_DELAY );
+		    
+    if (tcp_data_size > 0)
 		{
-			for (int k = 0; k<tcp_data_size; k++)
+			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET);
+      // transmmit received data to the serial port
+      for (int k = 0; k < tcp_data_size; k++)
 				HAL_UART_Transmit(&huart3, &tcp_data[k], 1, 1000);
 
 			vPortFree(tcp_data);
@@ -496,13 +654,68 @@ void tcp_task (void *argument)
 			tcp_data_size = 0;
 		}
 		else
-			HAL_UART_Transmit(&huart3, &err, 1, 1000);
-
+    {
+			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+      HAL_UART_Transmit(&huart3, &err, 1, 1000);
+    }
 	}
-
-
 }
 
+/**
+ * @brief TCP callback for Receiver Mode
+ * 
+ */
+static err_t telnet_accept_callback (void *arg, struct tcp_pcb *newpcb, err_t err)
+{
+  LWIP_UNUSED_ARG(arg);
+  LWIP_UNUSED_ARG(err);
+
+  // set low priority to new connection
+  tcp_setprio(newpcb, TCP_PRIO_MIN);
+  
+  // set TCP receiver mode - add callback function
+  tcp_recv(newpcb, telnet_receiver_callback);
+  
+  // set error callback function
+  tcp_err(newpcb, telnet_rx_err_callback);
+  
+  return ERR_OK;
+}
+
+/**
+ * 
+ * 
+ */
+static err_t telnet_receiver_callback (void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
+{
+  static BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+  
+  if (p==NULL)
+  {
+    tcp_arg(tpcb, NULL);
+    tcp_sent(tpcb, NULL);
+    tcp_recv(tpcb, NULL);
+    tcp_err(tpcb, NULL);
+    
+    tcp_close(tpcb);
+    return 0;
+  }
+  else
+  {
+    tcp_pbuf_to_serial(p);
+    xSemaphoreGiveFromISR(udp_led_recv_semphr, &xHigherPriorityTaskWoken);
+    portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
+    return ERR_OK;
+  }
+  
+}
+
+
+/**
+ * 
+ * 
+ * 
+ */
 void tcp_pbuf_to_serial (struct pbuf* p)
 {
 	static BaseType_t xHigherPriorityTaskWoken = pdFALSE;
@@ -524,16 +737,45 @@ void tcp_pbuf_to_serial (struct pbuf* p)
 
 }
 
-void send_char_task(void *argument)
+void telnet_transmitter_task(void *argument)
 {
-	char test = 'A';
-	for (;;)
-	{
+  for(;;)
+  {
+    osDelay(1000);
+    
+  }
+}
 
-		//HAL_UART_Transmit(&huart3, &test, 1, 1000);
-		osDelay(2000);
-	}
+/**
+ * @brief Task to manage the Transmitter LED behaivior
+ * @note Green LED is set for Transmission
+ */
+void led_tx_task(void *argument)
+{
+  for(;;)
+  {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+    xSemaphoreTake (led_tx_semphr, portMAX_DELAY );
 
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+    osDelay(60);
+  }
+}
+
+/**
+ * @brief Task to manage the Receiver LED behaivior
+ * @note Orange LED is set for Reception
+ */
+void led_rx_task(void *argument)
+{
+  for(;;)
+  {
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_1, GPIO_PIN_SET);
+    xSemaphoreTake (led_rx_semphr, portMAX_DELAY );
+    
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_1, GPIO_PIN_RESET);
+    osDelay(60);
+  }
 }
 /* USER CODE END 4 */
 
@@ -548,48 +790,8 @@ void StartDefaultTask(void *argument)
 {
   /* init code for LWIP */
   /* USER CODE BEGIN 5 */
-  const char* str_message = "UDP MSG number: ";
-  const char* end_message = "- MSG sent from NUCLEO\n\r";
-  static uint32_t msg_counter = 0;
-  size_t str_size;
-  char num_message[10] = {0};
-  char *message;
-  osDelay(1000);
-
-  ip_addr_t PC_IPADDR;
-  IP_ADDR4(&PC_IPADDR, 192, 168, 1, 101);
-
-  struct udp_pcb* my_udp = udp_new();
-  udp_connect(my_udp, &PC_IPADDR, 55151);
-  struct pbuf* udp_buffer = NULL;
-  xSemaphoreGive(lwip_init_ready_semphr);
-  message = pvPortMalloc( (strlen(str_message)) + (strlen(end_message)) +10);
-
-  /* Infinite loop */
-  for (;;) {
-	msg_counter++;
-	str_size = sprintf(num_message, "%lx", msg_counter);
-
-	strcat(message, str_message);
-	strcat(message, num_message);
-	strcat(message, end_message);
-
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
-    osDelay(30000); // 1 message sent every 30 seconds
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET);
-    udp_buffer = pbuf_alloc(PBUF_TRANSPORT, strlen(message), PBUF_RAM);
-    if (udp_buffer != NULL)
-    {
-      memcpy(udp_buffer->payload, message, strlen(message));
-      udp_send(my_udp, udp_buffer);
-      pbuf_free(udp_buffer);
-
-    }
-    osDelay(80);
-    //vPortFree(message);
-    *message = '\0';
-    //vPortFree(message);
-  }
+  while(1){
+  osDelay(1000);}
   /* USER CODE END 5 */
 }
 
@@ -664,6 +866,7 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
   for(;;);
   /* USER CODE END Error_Handler_Debug */
 }
