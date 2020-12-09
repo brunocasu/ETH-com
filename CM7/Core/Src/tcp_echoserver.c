@@ -32,12 +32,15 @@
  *
  **/
 
- /* This file was modified by ST */
+/* This file was modified by ST */
+
+/**** Modified by Bruno Casu (SPRACE, São Paulo BR) ****/
 
 #include "tcp_echoserver.h"
 #include "lwip/debug.h"
 #include "lwip/stats.h"
 #include "lwip/tcp.h"
+#include <string.h>
 
 #if LWIP_TCP
 
@@ -62,6 +65,9 @@ struct tcp_echoserver_struct
   struct pbuf *p;         /* pointer on the received/to be transmitted pbuf */
 };
 
+/**** added global pcb to send tcp pkts ****/
+static struct tcp_pcb *host_tpcb;
+static struct tcp_echoserver_struct* tn;
 
 static err_t tcp_echoserver_accept(void *arg, struct tcp_pcb *newpcb, err_t err);
 static err_t tcp_echoserver_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err);
@@ -86,8 +92,8 @@ void tcp_echoserver_init(void)
   {
     err_t err;
     
-    /* bind echo_pcb to port 7 (ECHO protocol) */
-    err = tcp_bind(tcp_echoserver_pcb, IP_ADDR_ANY, 7);
+    // bind to telet default port (PORT 23)
+    err = tcp_bind(tcp_echoserver_pcb, IP_ADDR_ANY, 23);
     
     if (err == ERR_OK)
     {
@@ -106,8 +112,7 @@ void tcp_echoserver_init(void)
   else
   {
 	  k = MEMP_NUM_SYS_TIMEOUT;
-	  while (1); // tcp_new() returning NULL pointer
-
+	  // while (1); // tcp_new() returning NULL pointer
   }
 }
 
@@ -196,6 +201,11 @@ static err_t tcp_echoserver_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p
       /* acknowledge received packet */
       tcp_sent(tpcb, tcp_echoserver_sent);
       
+      /**** forward pkt data to serial interface ****/
+      //tcp_pbuf_to_serial(p);
+      //pbuf_free(es->p);
+      //tcp_recved(tpcb, es->p->len);
+      
       /* send remaining data*/
       tcp_echoserver_send(tpcb, es);
     }
@@ -219,18 +229,22 @@ static err_t tcp_echoserver_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p
     
     /* store reference to incoming pbuf (chain) */
     es->p = p;
-    
-    /**** capture the data from the package to be sent via serial interface *****/
+
+    /**** forward pkt data to serial interface ****/
     tcp_pbuf_to_serial(p);
 
-    /* initialize LwIP tcp_sent callback function */
-    tcp_sent(tpcb, tcp_echoserver_sent);
+    /**** clear for new reception ****/
+    //pbuf_free(es->p);
+    //tcp_recved(tpcb, es->p->len);
     
+    /**** skip re-transmission of tcp message (echo) ****/
     /* send back the received data (echo) */
     tcp_echoserver_send(tpcb, es);
     
-
-
+    /**** store tpcb struct for transsmission ****/
+    host_tpcb = tpcb; 
+    tn = es;
+    
     ret_err = ERR_OK;
   }
   else if (es->state == ES_RECEIVED)
@@ -240,9 +254,14 @@ static err_t tcp_echoserver_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p
     {
       es->p = p;
   
-      /**** capture the data from the package to be sent via serial interface *****/
+      /**** forward pkt data to serial interface ****/
       tcp_pbuf_to_serial(p);
 
+      /**** clear for new reception ****/
+      //pbuf_free(es->p);
+      //tcp_recved(tpcb, es->p->len);
+
+      /**** skip re-transmission of tcp message (echo) ****/
       /* send back received data */
       tcp_echoserver_send(tpcb, es);
     }
@@ -451,6 +470,17 @@ static void tcp_echoserver_connection_close(struct tcp_pcb *tpcb, struct tcp_ech
   
   /* close tcp connection */
   tcp_close(tpcb);
+}
+
+void telnet_send (char* message, uint16_t len)
+{
+  tn->p->payload = message;
+  tn->p->len = len;
+
+  /* initialize LwIP tcp_sent callback function */
+  tcp_sent(host_tpcb, tcp_echoserver_sent);
+  /**** send characters ****/
+  tcp_echoserver_send(host_tpcb, tn);
 }
 
 #endif /* LWIP_TCP */

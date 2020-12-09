@@ -29,8 +29,10 @@
  */
 #ifndef __TCP_ECHOSERVER_H__
 #define __TCP_ECHOSERVER_H__
+#include "stm32h7xx_hal.h"
 
 void tcp_echoserver_init(void);
 void tcp_pbuf_to_serial (struct pbuf* p);
+void telnet_send (char* message, uint16_t len);
 
 #endif /* __TCP_ECHOSERVER */
