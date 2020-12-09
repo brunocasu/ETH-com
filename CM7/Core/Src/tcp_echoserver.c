@@ -41,6 +41,7 @@
 #include "lwip/stats.h"
 #include "lwip/tcp.h"
 #include <string.h>
+#include "main.h"
 
 #if LWIP_TCP
 
@@ -77,6 +78,8 @@ static err_t tcp_echoserver_sent(void *arg, struct tcp_pcb *tpcb, u16_t len);
 static void tcp_echoserver_send(struct tcp_pcb *tpcb, struct tcp_echoserver_struct *es);
 static void tcp_echoserver_connection_close(struct tcp_pcb *tpcb, struct tcp_echoserver_struct *es);
 
+/**** added clear function for incoming pkts****/
+static void tcp_clear(struct tcp_pcb *tpcb, struct tcp_echoserver_struct *es);
 
 /**
   * @brief  Initializes the tcp echo server
@@ -153,7 +156,7 @@ static err_t tcp_echoserver_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
     tcp_err(newpcb, tcp_echoserver_error);
     
     /* initialize lwip tcp_poll callback function for newpcb */
-    tcp_poll(newpcb, tcp_echoserver_poll, 0);
+    //tcp_poll(newpcb, tcp_echoserver_poll, 0);
     
     ret_err = ERR_OK;
   }
@@ -161,6 +164,7 @@ static err_t tcp_echoserver_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
   {
     /*  close tcp connection */
     tcp_echoserver_connection_close(newpcb, es);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET); // RED LED on
     /* return memory error */
     ret_err = ERR_MEM;
   }
@@ -180,7 +184,7 @@ static err_t tcp_echoserver_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p
 {
   struct tcp_echoserver_struct *es;
   err_t ret_err;
-
+int t = 0;
   LWIP_ASSERT("arg != NULL",arg != NULL);
   
   es = (struct tcp_echoserver_struct *)arg;
@@ -194,20 +198,20 @@ static err_t tcp_echoserver_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p
     {
        /* we're done sending, close connection */
        tcp_echoserver_connection_close(tpcb, es);
+
     }
     else
     {
       /* we're not done yet */
       /* acknowledge received packet */
-      tcp_sent(tpcb, tcp_echoserver_sent);
+      //tcp_sent(tpcb, tcp_echoserver_sent);
       
       /**** forward pkt data to serial interface ****/
-      //tcp_pbuf_to_serial(p);
-      //pbuf_free(es->p);
-      //tcp_recved(tpcb, es->p->len);
+      tcp_pbuf_to_serial(p);
+      tcp_clear(tpcb, es);
       
       /* send remaining data*/
-      tcp_echoserver_send(tpcb, es);
+      //tcp_echoserver_send(tpcb, es);
     }
     ret_err = ERR_OK;
   }   
@@ -234,16 +238,16 @@ static err_t tcp_echoserver_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p
     tcp_pbuf_to_serial(p);
 
     /**** clear for new reception ****/
-    //pbuf_free(es->p);
-    //tcp_recved(tpcb, es->p->len);
+    tcp_clear(tpcb, es);
     
     /**** skip re-transmission of tcp message (echo) ****/
     /* send back the received data (echo) */
-    tcp_echoserver_send(tpcb, es);
+    // tcp_echoserver_send(tpcb, es);
     
     /**** store tpcb struct for transsmission ****/
-    host_tpcb = tpcb; 
-    tn = es;
+    //telnet_send(); TODO rework this function
+    //host_tpcb = tpcb;
+    //tn = es;
     
     ret_err = ERR_OK;
   }
@@ -258,12 +262,11 @@ static err_t tcp_echoserver_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p
       tcp_pbuf_to_serial(p);
 
       /**** clear for new reception ****/
-      //pbuf_free(es->p);
-      //tcp_recved(tpcb, es->p->len);
+      tcp_clear(tpcb, es);
 
       /**** skip re-transmission of tcp message (echo) ****/
       /* send back received data */
-      tcp_echoserver_send(tpcb, es);
+      //tcp_echoserver_send(tpcb, es);
     }
     else
     {
@@ -272,6 +275,9 @@ static err_t tcp_echoserver_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p
       /* chain pbufs to the end of what we recv'ed previously  */
       ptr = es->p;
       pbuf_chain(ptr,p);
+
+      t++;
+
     }
     ret_err = ERR_OK;
   }
@@ -333,7 +339,7 @@ static err_t tcp_echoserver_poll(void *arg, struct tcp_pcb *tpcb)
     {
       tcp_sent(tpcb, tcp_echoserver_sent);
       /* there is a remaining pbuf (chain) , try to send data */
-      tcp_echoserver_send(tpcb, es);
+      //tcp_echoserver_send(tpcb, es);
     }
     else
     {
@@ -374,7 +380,7 @@ static err_t tcp_echoserver_sent(void *arg, struct tcp_pcb *tpcb, u16_t len)
   {
     /* still got pbufs to send */
     tcp_sent(tpcb, tcp_echoserver_sent);
-    tcp_echoserver_send(tpcb, es);
+    //tcp_echoserver_send(tpcb, es);
   }
   else
   {
@@ -447,6 +453,45 @@ static void tcp_echoserver_send(struct tcp_pcb *tpcb, struct tcp_echoserver_stru
 }
 
 /**
+ * @brief clear tcp struct to enable new reception
+ *
+ *
+ */
+static void tcp_clear(struct tcp_pcb *tpcb, struct tcp_echoserver_struct *es)
+{
+	struct pbuf *ptr;
+
+	    /* get pointer on pbuf from es structure */
+	    ptr = es->p;
+
+	      uint16_t plen;
+	      uint8_t freed;
+
+	      plen = ptr->len;
+
+	      /* continue with next pbuf in chain (if any) */
+	      es->p = ptr->next;
+
+	      if(es->p != NULL)
+	      {
+	        /* increment reference count for es->p */
+	        pbuf_ref(es->p);
+	      }
+
+	     /* chop first pbuf from chain */
+	      do
+	      {
+	        /* try hard to free pbuf */
+	        freed = pbuf_free(ptr);
+	      }
+	      while(freed == 0);
+	     /* we can read more data now */
+	     tcp_recved(tpcb, plen);
+
+}
+
+
+/**
   * @brief  This functions closes the tcp connection
   * @param  tcp_pcb: pointer on the tcp connection
   * @param  es: pointer on echo_state structure
@@ -467,7 +512,7 @@ static void tcp_echoserver_connection_close(struct tcp_pcb *tpcb, struct tcp_ech
   {
     mem_free(es);
   }  
-  
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET); // RED LED on
   /* close tcp connection */
   tcp_close(tpcb);
 }

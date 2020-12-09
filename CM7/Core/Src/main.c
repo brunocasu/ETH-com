@@ -648,6 +648,8 @@ void telnet_server_task (void *argument)
 	  vPortFree(tcp_data);
 	  tcp_data_size = 0;
 	}
+
+    tcp_echoserver_init();
   }
 }
 
