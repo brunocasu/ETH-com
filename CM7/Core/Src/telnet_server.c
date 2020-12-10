@@ -36,10 +36,12 @@
 
 /**** Modified by Bruno Casu (SPRACE, São Paulo BR) ****/
 
-#include "tcp_echoserver.h"
+#include "telnet_server.h"
+
 #include "lwip/debug.h"
 #include "lwip/stats.h"
 #include "lwip/tcp.h"
+
 #include <string.h>
 #include "main.h"
 
@@ -66,10 +68,7 @@ struct tcp_echoserver_struct
   struct pbuf *p;         /* pointer on the received/to be transmitted pbuf */
 };
 
-/**** added global pcb to send tcp pkts ****/
-static struct tcp_pcb *host_tpcb;
-static struct tcp_echoserver_struct* tn;
-
+void telnet_init(void);
 static err_t tcp_echoserver_accept(void *arg, struct tcp_pcb *newpcb, err_t err);
 static err_t tcp_echoserver_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err);
 static void tcp_echoserver_error(void *arg, err_t err);
@@ -78,15 +77,94 @@ static err_t tcp_echoserver_sent(void *arg, struct tcp_pcb *tpcb, u16_t len);
 static void tcp_echoserver_send(struct tcp_pcb *tpcb, struct tcp_echoserver_struct *es);
 static void tcp_echoserver_connection_close(struct tcp_pcb *tpcb, struct tcp_echoserver_struct *es);
 
-/**** added clear function for incoming pkts****/
-static void tcp_clear(struct tcp_pcb *tpcb, struct tcp_echoserver_struct *es);
+
+/**** added global pcb to send tcp pkts ****/
+static struct tcp_pcb* host_tpcb;
+static struct tcp_echoserver_struct* tn;
+
+/**** tcp data to be sent via serial port ****/
+char* tcp_data;
+uint16_t tcp_data_size = 0;
+
+/**** telnet task handlers ****/
+osThreadId_t telnet_recv_task_handle;
+const osThreadAttr_t telnet_recv_task_attributes = {
+  .name = "telnet server",
+  .priority = (osPriority_t) osPriorityNormal1,
+  .stack_size = 256 * 4
+};
+
+/**** semaphore to write the TCP data to UART ****/
+static SemaphoreHandle_t serial_send_release_semphr = NULL;
+
+/**** added function to clear the buffers for a new pkt reception ****/
+static void telnet_recv_reset(struct tcp_pcb *tpcb, struct tcp_echoserver_struct *es);
+
+/**
+ * @brief This task works implements the reception of TCP pkts via telnet, and the
+ *        transmission of the received characters via serial port (UART) 
+ * @note TCP connection is binding on default telnet port (PORT 23)
+ */
+void telnet_recv_task (void *argument)
+{
+  char carriage_return = 0x0D;
+  
+  // create semaphores
+  serial_send_release_semphr = xSemaphoreCreateBinary();
+  
+  // Start TCP server
+  telnet_init(); // echoserver has been modified to send pkt data through serial port (UART)
+  
+  for(;;)
+  {
+    // block until tcp_pbuf_to_serial() function releases the semaphore (TCP pkt received)
+    xSemaphoreTake ( serial_send_release_semphr, portMAX_DELAY );
+		    
+    // send TCP data to UART
+    if (tcp_data_size > 0)
+	  {
+	  // transmit received data to the serial port
+	  for (int k = 0; k < tcp_data_size; k++){
+	    HAL_UART_Transmit(&huart3, &tcp_data[k], 1, 1000);}
+
+	  HAL_UART_Transmit(&huart3, &carriage_return, 1, 1000);
+	  vPortFree(tcp_data);
+	  tcp_data_size = 0;
+	  }
+    //telnet_init();
+  }
+}
+
+/**
+ * @brief Capture the data from the TCP pkg and store in a global variable. Releases the semaphore to complete the transmission on the serial port.
+ * @note this function is called at tcp_echoserver_recv() from the TCP echoserver driver
+ */
+void tcp_pbuf_to_serial (struct pbuf* p)
+{
+	static BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+	char* buff_ptr;
+
+	tcp_data_size = p->len;
+	if (tcp_data_size > 0)
+	{
+		tcp_data = pvPortMalloc(tcp_data_size);
+		buff_ptr = (char*)p->payload;
+	}
+
+	for (int i = 0; i<tcp_data_size; i++){
+		tcp_data[i] = buff_ptr[i];}
+
+	xSemaphoreGiveFromISR(serial_send_release_semphr, &xHigherPriorityTaskWoken);
+	portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
+}
 
 /**
   * @brief  Initializes the tcp echo server
   * @param  None
   * @retval None
+  * @note the echo server driver was altered to implement the telnet protocol operations
   */
-void tcp_echoserver_init(void)
+void telnet_init(void)
 {
   /* create new tcp pcb */
   tcp_echoserver_pcb = tcp_new();
@@ -95,7 +173,7 @@ void tcp_echoserver_init(void)
   {
     err_t err;
     
-    // bind to telet default port (PORT 23)
+    /**** bind to telet default port (PORT 23) ****/
     err = tcp_bind(tcp_echoserver_pcb, IP_ADDR_ANY, 23);
     
     if (err == ERR_OK)
@@ -115,6 +193,7 @@ void tcp_echoserver_init(void)
   else
   {
 	  k = MEMP_NUM_SYS_TIMEOUT;
+    /**** funton should not block ****/
 	  // while (1); // tcp_new() returning NULL pointer
   }
 }
@@ -164,7 +243,7 @@ static err_t tcp_echoserver_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
   {
     /*  close tcp connection */
     tcp_echoserver_connection_close(newpcb, es);
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET); // RED LED on
+
     /* return memory error */
     ret_err = ERR_MEM;
   }
@@ -184,7 +263,7 @@ static err_t tcp_echoserver_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p
 {
   struct tcp_echoserver_struct *es;
   err_t ret_err;
-int t = 0;
+
   LWIP_ASSERT("arg != NULL",arg != NULL);
   
   es = (struct tcp_echoserver_struct *)arg;
@@ -208,7 +287,9 @@ int t = 0;
       
       /**** forward pkt data to serial interface ****/
       tcp_pbuf_to_serial(p);
-      tcp_clear(tpcb, es);
+      
+      /**** clear for new reception ****/
+      telnet_recv_reset(tpcb, es);
       
       /* send remaining data*/
       //tcp_echoserver_send(tpcb, es);
@@ -238,7 +319,7 @@ int t = 0;
     tcp_pbuf_to_serial(p);
 
     /**** clear for new reception ****/
-    tcp_clear(tpcb, es);
+    telnet_recv_reset(tpcb, es);
     
     /**** skip re-transmission of tcp message (echo) ****/
     /* send back the received data (echo) */
@@ -262,7 +343,7 @@ int t = 0;
       tcp_pbuf_to_serial(p);
 
       /**** clear for new reception ****/
-      tcp_clear(tpcb, es);
+      telnet_recv_reset(tpcb, es);
 
       /**** skip re-transmission of tcp message (echo) ****/
       /* send back received data */
@@ -275,8 +356,6 @@ int t = 0;
       /* chain pbufs to the end of what we recv'ed previously  */
       ptr = es->p;
       pbuf_chain(ptr,p);
-
-      t++;
 
     }
     ret_err = ERR_OK;
@@ -457,39 +536,37 @@ static void tcp_echoserver_send(struct tcp_pcb *tpcb, struct tcp_echoserver_stru
  *
  *
  */
-static void tcp_clear(struct tcp_pcb *tpcb, struct tcp_echoserver_struct *es)
+static void telnet_recv_reset(struct tcp_pcb *tpcb, struct tcp_echoserver_struct *es)
 {
 	struct pbuf *ptr;
 
-	    /* get pointer on pbuf from es structure */
-	    ptr = es->p;
+  /* get pointer on pbuf from es structure */
+	ptr = es->p;
 
-	      uint16_t plen;
-	      uint8_t freed;
+	uint16_t plen;
+	uint8_t freed;
 
-	      plen = ptr->len;
+	plen = ptr->len;
 
-	      /* continue with next pbuf in chain (if any) */
-	      es->p = ptr->next;
+	/* continue with next pbuf in chain (if any) */
+	es->p = ptr->next;
 
-	      if(es->p != NULL)
-	      {
-	        /* increment reference count for es->p */
-	        pbuf_ref(es->p);
-	      }
+	if(es->p != NULL)
+	{
+	  /* increment reference count for es->p */
+	  pbuf_ref(es->p);
+  }
 
-	     /* chop first pbuf from chain */
-	      do
-	      {
-	        /* try hard to free pbuf */
-	        freed = pbuf_free(ptr);
-	      }
-	      while(freed == 0);
-	     /* we can read more data now */
-	     tcp_recved(tpcb, plen);
-
+	/* chop first pbuf from chain */
+	do
+	{
+	  /* try hard to free pbuf */
+	  freed = pbuf_free(ptr);
+	}
+	while(freed == 0);
+	/* we can read more data now */
+	tcp_recved(tpcb, plen);
 }
-
 
 /**
   * @brief  This functions closes the tcp connection
@@ -512,7 +589,7 @@ static void tcp_echoserver_connection_close(struct tcp_pcb *tpcb, struct tcp_ech
   {
     mem_free(es);
   }  
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET); // RED LED on
+
   /* close tcp connection */
   tcp_close(tpcb);
 }
@@ -522,10 +599,78 @@ void telnet_send (char* message, uint16_t len)
   tn->p->payload = message;
   tn->p->len = len;
 
-  /* initialize LwIP tcp_sent callback function */
   tcp_sent(host_tpcb, tcp_echoserver_sent);
-  /**** send characters ****/
-  tcp_echoserver_send(host_tpcb, tn);
+  
+  
 }
+
+// void telnet_transmitter_task(void *argument)
+// {
+//   char single_character;
+//   static int end_of_msg = 0;
+//   
+//   for(;;)
+//   {
+//     // capture characters until receive a NULL char or a Carriage Return char
+//     while (end_of_msg == 0)
+//     {
+//       if (HAL_UART_Receive_IT(&huart3, &single_character, 1) != HAL_OK)
+//
+// 
+//       xSemaphoreTake (received_char_semphr, portMAX_DELAY);
+//       serial_to_tcp_buff[serial_to_tcp_buff_count] = single_character;
+//       serial_to_tcp_buff_count++;
+//       
+//       if ((single_character==0x00) || (single_character==0x0d)) 
+//       {
+//         end_of_msg = 1;
+//       }
+//     }
+//     // TODO implement queue system
+//     xSemaphoreGive(tcp_send_release_semphr);
+//     end_of_msg = 0;
+//   }
+// }
+// 
+// void serial_to_tcp_task(void *argument)
+// {
+//   osDelay(100);
+//   for(;;)
+//   {
+//     xSemaphoreTake (tcp_send_release_semphr, portMAX_DELAY);
+//     telnet_send (serial_to_tcp_buff, serial_to_tcp_buff_count);
+//   }
+// }
+// 
+// /**
+//  * @brief set interruption handler for USART3
+//  * 
+//  */
+// void USART3_IRQHandler(void)
+// {
+//   HAL_UART_IRQHandler(&huart3);
+// }
+// 
+// /**
+//  * @brief set callback function for the interrupt handler of USART3
+//  * 
+//  */
+// void HAL_UART_RxCpltCallback(UART_HandleTypeDef *UartHandle)
+// {
+// 	static BaseType_t xHigherPriorityTaskWoken;
+// 	xHigherPriorityTaskWoken = pdFALSE;
+// 
+// 	//keyboard_char_rec = 1;
+// 
+// 	xSemaphoreGiveFromISR(received_char_semphr, &xHigherPriorityTaskWoken);
+// 	portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
+// }
+// 
+// void HAL_UART_ErrorCallback(UART_HandleTypeDef *UartHandle)
+// {
+// 	//keyboard_char_rec = 2;
+// 	//Error_Handler();
+//
+// }
 
 #endif /* LWIP_TCP */

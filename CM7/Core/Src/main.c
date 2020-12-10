@@ -28,7 +28,7 @@
 #include <lwip/debug.h>
 #include "lwip/tcp.h"
 #include <string.h>
-#include <tcp_echoserver.h>
+#include <telnet_server.h>
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -80,40 +80,13 @@ const osThreadAttr_t udp_echo_task_attributes = {
   .stack_size = 256 * 4
 };
 
-osThreadId_t telnet_server_task_handle;
-const osThreadAttr_t telnet_server_task_attributes = {
-  .name = "telnet server",
-  .priority = (osPriority_t) osPriorityNormal1,
-  .stack_size = 256 * 4
-};
+// osThreadId_t telnet_server_task_handle;
+// const osThreadAttr_t telnet_server_task_attributes = {
+//   .name = "telnet server",
+//   .priority = (osPriority_t) osPriorityNormal1,
+//   .stack_size = 256 * 4
+// };
 
-osThreadId_t telnet_transmitter_task_handle;
-const osThreadAttr_t telnet_transmitter_task_attributes = {
-  .name = "TCP transmitter",
-  .priority = (osPriority_t) osPriorityNormal1,
-  .stack_size = 256 * 8
-};
-
-osThreadId_t serial_to_tcp_task_handle;
-const osThreadAttr_t serial_to_tcp_task_attributes = {
-  .name = "TCP send pkt",
-  .priority = (osPriority_t) osPriorityNormal1,
-  .stack_size = 256 * 8
-};
-
-osThreadId_t led_serial_tx_task_handle;
-const osThreadAttr_t led_serial_tx_task_attributes = {
-  .name = "GreenLED",
-  .priority = (osPriority_t) osPriorityNormal,
-  .stack_size = 128 * 4
-};
-
-osThreadId_t led_serial_rx_task_handle;
-const osThreadAttr_t led_serial_rx_task_attributes = {
-  .name = "OrangeLED",
-  .priority = (osPriority_t) osPriorityNormal,
-  .stack_size = 128 * 4
-};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -126,54 +99,20 @@ void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 
-#define TELNET_ACCEPTED 1
-#define TELNET_RECEIVED 2
-#define TELNET_CLOSING  3
-int telnet_status = 0;
-
 // Task Functions
 void udp_timer_message_task(void *argument);
 void udp_echo_task(void *argument);
-void telnet_server_task(void *argument);
-void telnet_transmitter_task(void *argument);
-void serial_to_tcp_task(void *argument);
-void led_serial_tx_task(void *argument);
-void led_serial_rx_task(void *argument);
   
 static SemaphoreHandle_t udp_echo_semphr = NULL;
 // flags for LED behaivior
-static SemaphoreHandle_t led_tx_semphr = NULL;
-static SemaphoreHandle_t led_rx_semphr = NULL;
-// semaphore to write the TCP data to UART
-static SemaphoreHandle_t serial_send_release_semphr = NULL;
+
+// // semaphore to write the TCP data to UART
+// static SemaphoreHandle_t serial_send_release_semphr = NULL;
 // semaphore to write UART data to TCP stack_size
-static SemaphoreHandle_t tcp_send_release_semphr = NULL;
-
-static SemaphoreHandle_t received_char_semphr = NULL;
-
-
-
-// UDP callbacks
-
-// TCP callbacks
-static err_t telnet_accept_callback (void *arg, struct tcp_pcb *newpcb, err_t err);
-static err_t telnet_receiver_callback (void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err);
-static void telnet_rx_err_callback (void *arg, err_t err);
-static err_t telnet_sent_callback (void *arg, struct tcp_pcb *tpcb, uint16_t len);
-
-// telnet operation functions
-void tcp_pbuf_to_serial (struct pbuf* p);
-static void tcp_send_pkt (struct tcp_pcb *tpcb, struct pbuf *p);
 
 // global variables to recover TCP data from ISR
-char* tcp_data;
-uint16_t tcp_data_size = 0;
-struct pbuf *host_p;
-uint8_t tcp_retries = 0;
-  
-char serial_to_tcp_buff[1024] = {0};
-int serial_to_tcp_buff_count = 0;
-int telnet_tx_complete = 0;
+// char* tcp_data;
+// uint16_t tcp_data_size = 0;
 
 /* USER CODE END PFP */
 
@@ -280,11 +219,7 @@ int main(void)
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
   udp_echo_semphr = xSemaphoreCreateBinary();
-  led_tx_semphr = xSemaphoreCreateBinary();
-  led_rx_semphr = xSemaphoreCreateBinary();
-  serial_send_release_semphr = xSemaphoreCreateBinary();
-  tcp_send_release_semphr = xSemaphoreCreateBinary();
-  received_char_semphr = xSemaphoreCreateBinary();
+  //serial_send_release_semphr = xSemaphoreCreateBinary();
   
   /* USER CODE END RTOS_SEMAPHORES */
 
@@ -304,15 +239,7 @@ int main(void)
   /* add threads, ... */
   udp_timer_message_task_handle = osThreadNew(udp_timer_message_task, NULL, &udp_timer_message_task_attributes);
   udp_echo_task_handle = osThreadNew(udp_echo_task, NULL, &udp_echo_task_attributes);
-  telnet_server_task_handle = osThreadNew(telnet_server_task, NULL, &telnet_server_task_attributes);
-  //telnet_transmitter_task_handle = osThreadNew(telnet_transmitter_task, NULL, &telnet_transmitter_task_attributes);
-  //serial_to_tcp_task_handle = osThreadNew(serial_to_tcp_task, NULL, &serial_to_tcp_task_attributes);
-  led_serial_tx_task_handle = osThreadNew(led_serial_tx_task, NULL, &led_serial_tx_task_attributes);
-  led_serial_rx_task_handle = osThreadNew(led_serial_rx_task, NULL, &led_serial_rx_task_attributes);
-
-  // udp_reciever_task_handle = osThreadNew(udp_reciever_task, NULL, &udp_reciever_task_attributes);
-  // tcp_task_handle = osThreadNew(tcp_task, NULL, &tcp_task_attributes);
-  // send_char_task_handle = osThreadNew(send_char_task, NULL, &send_char_task_attributes);
+  telnet_recv_task_handle = osThreadNew(telnet_recv_task, NULL, &telnet_recv_task_attributes);
   
   // Start LwIP
   MX_LWIP_Init();
@@ -618,165 +545,65 @@ void udp_echo_task(void *argument)
   }
 }
 
-/**
- * @brief This task works as a telnet server capturing the characters from the TCP connection and
- *        sending the data to a serial port (UART) 
- * @note TCP connection is binding on default telnet port (PORT 23)
- */
-void telnet_server_task (void *argument)
-{
-  // char skip_line = 0x0A;
-  char carriage_return = 0x0D;
+// /**
+//  * @brief This task works as a telnet server capturing the characters from the TCP connection and
+//  *        sending the data to a serial port (UART) 
+//  * @note TCP connection is binding on default telnet port (PORT 23)
+//  */
+// void telnet_server_task (void *argument)
+// {
+//   // char skip_line = 0x0A;
+//   char carriage_return = 0x0D;
+// 
+//   // Start TCP server
+//   tcp_echoserver_init(); // echoserver has been modified to send pkt data through serial port (UART)
+//   
+//   for(;;)
+//   {
+//     // block until tcp_pbuf_to_serial() function releases the semaphore (TCP pkt received)
+//     xSemaphoreTake ( serial_send_release_semphr, portMAX_DELAY );
+// 		    
+//     // send TCP data to UART
+//     if (tcp_data_size > 0)
+// 	{
+// 	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET); // RED LED off
+// 	  // transmmit received data to the serial port
+// 	  for (int k = 0; k < tcp_data_size; k++){
+// 	    HAL_UART_Transmit(&huart3, &tcp_data[k], 1, 1000);}
+// 
+// 	  HAL_UART_Transmit(&huart3, &carriage_return, 1, 1000);
+// 	  vPortFree(tcp_data);
+// 	  tcp_data_size = 0;
+// 	}
+// 
+//     tcp_echoserver_init();
+//   }
+// }
+// 
+// /**
+//  * @brief Capture the data from the TCP pkg and store in a global variable. Releases the semaphore to complete the transmission on the serial port.
+//  * @note this function is called at tcp_echoserver_recv() from the TCP echoserver driver
+//  */
+// void tcp_pbuf_to_serial (struct pbuf* p)
+// {
+// 	static BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+// 	char* buff_ptr;
+// 
+// 	tcp_data_size = p->len;
+// 	if (tcp_data_size > 0)
+// 	{
+// 		tcp_data = pvPortMalloc(tcp_data_size);
+// 		buff_ptr = (char*)p->payload;
+// 	}
+// 
+// 	for (int i = 0; i<tcp_data_size; i++){
+// 		tcp_data[i] = buff_ptr[i];}
+// 
+// 	xSemaphoreGiveFromISR(serial_send_release_semphr, &xHigherPriorityTaskWoken);
+// 	//xSemaphoreGiveFromISR(led_tx_semphr, &xHigherPriorityTaskWoken);
+// 	portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
+// }
 
-  // Start TCP server
-  tcp_echoserver_init(); // echoserver has been modified to send pkt data through serial port (UART)
-  
-  for(;;)
-  {
-    // block until tcp_pbuf_to_serial() function releases the semaphore (TCP pkt received)
-    xSemaphoreTake ( serial_send_release_semphr, portMAX_DELAY );
-		    
-    // send TCP data to UART
-    if (tcp_data_size > 0)
-	{
-	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET); // RED LED off
-	  // transmmit received data to the serial port
-	  for (int k = 0; k < tcp_data_size; k++){
-	    HAL_UART_Transmit(&huart3, &tcp_data[k], 1, 1000);}
-
-	  HAL_UART_Transmit(&huart3, &carriage_return, 1, 1000);
-	  vPortFree(tcp_data);
-	  tcp_data_size = 0;
-	}
-
-    tcp_echoserver_init();
-  }
-}
-
-/**
- * @brief Capture the data from the TCP pkg and store in a global variable. Releases the semaphore to complete the transmission on the serial port.
- * @note this function is called at tcp_echoserver_recv() from the TCP echoserver driver
- */
-void tcp_pbuf_to_serial (struct pbuf* p)
-{
-	static BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-	char* buff_ptr;
-
-	tcp_data_size = p->len;
-	if (tcp_data_size > 0)
-	{
-		tcp_data = pvPortMalloc(tcp_data_size);
-		buff_ptr = (char*)p->payload;
-	}
-
-	for (int i = 0; i<tcp_data_size; i++){
-		tcp_data[i] = buff_ptr[i];}
-
-	xSemaphoreGiveFromISR(serial_send_release_semphr, &xHigherPriorityTaskWoken);
-	//xSemaphoreGiveFromISR(led_tx_semphr, &xHigherPriorityTaskWoken);
-	portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
-}
-
-void telnet_transmitter_task(void *argument)
-{
-  char single_character;
-  static int end_of_msg = 0;
-  
-  for(;;)
-  {
-    // capture characters until receive a NULL char or a Carriage Return char
-    while (end_of_msg == 0)
-    {
-      if (HAL_UART_Receive_IT(&huart3, &single_character, 1) != HAL_OK)
-    	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET); // RED LED on
-
-      xSemaphoreTake (received_char_semphr, portMAX_DELAY);
-      serial_to_tcp_buff[serial_to_tcp_buff_count] = single_character;
-      serial_to_tcp_buff_count++;
-      
-      if ((single_character==0x00) || (single_character==0x0d)) 
-      {
-        end_of_msg = 1;
-      }
-    }
-    // TODO implement queue system
-    xSemaphoreGive(tcp_send_release_semphr);
-    end_of_msg = 0;
-  }
-}
-
-void serial_to_tcp_task(void *argument)
-{
-  osDelay(100);
-  for(;;)
-  {
-    xSemaphoreTake (tcp_send_release_semphr, portMAX_DELAY);
-    telnet_send (serial_to_tcp_buff, serial_to_tcp_buff_count);
-  }
-}
-
-/**
- * @brief set interruption handler for USART3
- * 
- */
-void USART3_IRQHandler(void)
-{
-  HAL_UART_IRQHandler(&huart3);
-}
-
-/**
- * @brief set callback function for the interrupt handler of USART3
- * 
- */
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *UartHandle)
-{
-	static BaseType_t xHigherPriorityTaskWoken;
-	xHigherPriorityTaskWoken = pdFALSE;
-
-	//keyboard_char_rec = 1;
-
-	xSemaphoreGiveFromISR(received_char_semphr, &xHigherPriorityTaskWoken);
-	portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
-}
-
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *UartHandle)
-{
-	//keyboard_char_rec = 2;
-	//Error_Handler();
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET); // RED LED on
-}
-
-/**
- * @brief Task to manage the Transmitter LED behaivior
- * @note Green LED is set for Transmission
- */
-void led_serial_tx_task(void *argument)
-{
-  for(;;)
-  {
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
-    xSemaphoreTake (led_tx_semphr, portMAX_DELAY );
-
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-    osDelay(80);
-  }
-}
-
-/**
- * @brief Task to manage the Receiver LED behaivior
- * @note Orange LED is set for Reception
- */
-void led_serial_rx_task(void *argument)
-{
-  for(;;)
-  {
-    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_1, GPIO_PIN_SET);
-    xSemaphoreTake (led_rx_semphr, portMAX_DELAY );
-    
-    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_1, GPIO_PIN_RESET);
-    osDelay(80);
-  }
-}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -790,8 +617,13 @@ void StartDefaultTask(void *argument)
 {
   /* init code for LWIP */
   /* USER CODE BEGIN 5 */
-  while(1){
-  osDelay(1000);}
+  while(1)
+  {
+	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+	  osDelay(1000);
+	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+	  osDelay(80);
+  }
   /* USER CODE END 5 */
 }
 

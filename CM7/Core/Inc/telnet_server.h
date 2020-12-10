@@ -30,9 +30,18 @@
 #ifndef __TCP_ECHOSERVER_H__
 #define __TCP_ECHOSERVER_H__
 #include "stm32h7xx_hal.h"
+#include "cmsis_os.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "semphr.h"
 
-void tcp_echoserver_init(void);
-void tcp_pbuf_to_serial (struct pbuf* p);
-void telnet_send (char* message, uint16_t len);
+/**** add UART handler ****/
+extern UART_HandleTypeDef huart3;
+
+/**** threads to be created at main ****/
+void telnet_recv_task(void *argument);
+extern osThreadId_t telnet_recv_task_handle;
+extern const osThreadAttr_t telnet_recv_task_attributes;
+
 
 #endif /* __TCP_ECHOSERVER */
