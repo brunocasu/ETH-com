@@ -27,21 +27,20 @@
  * This file is part of the lwIP TCP/IP stack.
  * 
  */
-#ifndef __TCP_ECHOSERVER_H__
-#define __TCP_ECHOSERVER_H__
+#ifndef __TELNET_H__
+#define __TELNET_H__
 #include "stm32h7xx_hal.h"
 #include "cmsis_os.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "semphr.h"
 
-/**** add UART handler ****/
-extern UART_HandleTypeDef huart3;
-
-/**** threads to be created at main ****/
+/**** handler and function to create the telnet thread ****/
 void telnet_recv_task(void *argument);
 extern osThreadId_t telnet_recv_task_handle;
 extern const osThreadAttr_t telnet_recv_task_attributes;
 
+// user must include the telnet thread as the following:
+// telnet_recv_task_handle = osThreadNew(telnet_recv_task, NULL, &telnet_recv_task_attributes);
 
 #endif /* __TCP_ECHOSERVER */
