@@ -61,7 +61,7 @@ PCD_HandleTypeDef hpcd_USB_OTG_FS;
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityNormal1,
   .stack_size = 256 * 4
 };
 
@@ -136,7 +136,7 @@ int main(void)
 /* USER CODE END Boot_Mode_Sequence_0 */
 
   /* MPU Configuration--------------------------------------------------------*/
-  MPU_Config();
+   MPU_Config();
 
   /* Enable I-Cache---------------------------------------------------------*/
   SCB_EnableICache();
@@ -453,7 +453,7 @@ void udp_timer_message_task(void *argument)
   
   ip_addr_t PC_IPADDR;
   // Set IP addr for the target
-  IP_ADDR4(&PC_IPADDR, 192, 168, 1, 106);
+  IP_ADDR4(&PC_IPADDR, 192, 168, 1, 100);
   // Create new UDP connection
   struct udp_pcb* my_udp = udp_new();
   udp_connect(my_udp, &PC_IPADDR, 55151); // Messages transmitted at PORT 55151
@@ -545,64 +545,6 @@ void udp_echo_task(void *argument)
   }
 }
 
-// /**
-//  * @brief This task works as a telnet server capturing the characters from the TCP connection and
-//  *        sending the data to a serial port (UART) 
-//  * @note TCP connection is binding on default telnet port (PORT 23)
-//  */
-// void telnet_server_task (void *argument)
-// {
-//   // char skip_line = 0x0A;
-//   char carriage_return = 0x0D;
-// 
-//   // Start TCP server
-//   tcp_echoserver_init(); // echoserver has been modified to send pkt data through serial port (UART)
-//   
-//   for(;;)
-//   {
-//     // block until tcp_pbuf_to_serial() function releases the semaphore (TCP pkt received)
-//     xSemaphoreTake ( serial_send_release_semphr, portMAX_DELAY );
-// 		    
-//     // send TCP data to UART
-//     if (tcp_data_size > 0)
-// 	{
-// 	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET); // RED LED off
-// 	  // transmmit received data to the serial port
-// 	  for (int k = 0; k < tcp_data_size; k++){
-// 	    HAL_UART_Transmit(&huart3, &tcp_data[k], 1, 1000);}
-// 
-// 	  HAL_UART_Transmit(&huart3, &carriage_return, 1, 1000);
-// 	  vPortFree(tcp_data);
-// 	  tcp_data_size = 0;
-// 	}
-// 
-//     tcp_echoserver_init();
-//   }
-// }
-// 
-// /**
-//  * @brief Capture the data from the TCP pkg and store in a global variable. Releases the semaphore to complete the transmission on the serial port.
-//  * @note this function is called at tcp_echoserver_recv() from the TCP echoserver driver
-//  */
-// void tcp_pbuf_to_serial (struct pbuf* p)
-// {
-// 	static BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-// 	char* buff_ptr;
-// 
-// 	tcp_data_size = p->len;
-// 	if (tcp_data_size > 0)
-// 	{
-// 		tcp_data = pvPortMalloc(tcp_data_size);
-// 		buff_ptr = (char*)p->payload;
-// 	}
-// 
-// 	for (int i = 0; i<tcp_data_size; i++){
-// 		tcp_data[i] = buff_ptr[i];}
-// 
-// 	xSemaphoreGiveFromISR(serial_send_release_semphr, &xHigherPriorityTaskWoken);
-// 	//xSemaphoreGiveFromISR(led_tx_semphr, &xHigherPriorityTaskWoken);
-// 	portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
-// }
 
 /* USER CODE END 4 */
 

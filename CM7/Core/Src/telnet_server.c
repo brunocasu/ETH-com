@@ -1,4 +1,4 @@
-/**
+ /**
  * Copyright (c) 2001-2004 Swedish Institute of Computer Science.
  * All rights reserved. 
  * 
@@ -41,6 +41,8 @@
 #include "lwip/debug.h"
 #include "lwip/stats.h"
 #include "lwip/tcp.h"
+
+#include "stream_buffer.h"
 
 #include <string.h>
 #include "main.h"
@@ -90,13 +92,6 @@ const osThreadAttr_t telnet_recv_task_attributes = {
   .stack_size = 256 * 4
 };
 
-osThreadId_t telnet_tx_task_handle;
-const osThreadAttr_t telnet_tx_task_attributes = {
-  .name = "telnet tx",
-  .priority = (osPriority_t) osPriorityNormal1,
-  .stack_size = 256 * 4
-};
-
 osThreadId_t telnet_serial_recv_task_handle;
 const osThreadAttr_t telnet_serial_recv_task_attributes = {
   .name = "serial recv",
@@ -118,17 +113,20 @@ void telnet_serial_recv_task (void *argument);
 /**** function to clear the buffers for a new pkt reception ****/
 static void telnet_recv_reset(struct tcp_pcb *tpcb, struct tcp_echoserver_struct *es);
 
-/**** tcp to serial buffers ****/
+/**** global to store host pcb data ****/
+struct tcp_pcb * host_pcb;
+
+/**** tcp to serial ****/
 char* tcp_data;
 uint16_t tcp_data_size = 0;
 
-/**** serial to tcp buffers ****/
+/**** serial to tcp ****/
 char single_character;
-char serial_to_tcp_buff[1024] = {0};
-uint16_t serial_to_tcp_buff_size = 0;
+uint16_t serial_msg_size = 0;
+static StreamBufferHandle_t serial_to_tcp_stream_h = NULL;
+#define STREAM_BUFF_LENGTH_BYTES  ((size_t) 100)
+#define STREAM_BUFF_TRIGG_LEVEL   ((BaseType_t) 1)
 
-/**** add UART handler ****/
-//#define huart3 huart3;
 
 /**
   * @brief  Initializes the tcp echo server
@@ -187,6 +185,9 @@ static err_t tcp_echoserver_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
 
   /* set priority for the newly accepted tcp connection newpcb */
   tcp_setprio(newpcb, TCP_PRIO_MIN);
+  
+  /**** keep pcb data for transmission ****/
+  host_pcb = (struct tcp_pcb *)newpcb;
 
   /* allocate structure es to maintain tcp connection informations */
   es = (struct tcp_echoserver_struct *)mem_malloc(sizeof(struct tcp_echoserver_struct));
@@ -509,8 +510,18 @@ static void tcp_echoserver_send(struct tcp_pcb *tpcb, struct tcp_echoserver_stru
  */
 void telnet_send (char* message, uint16_t len)
 {
-  //TODO implement tx function
+  err_t ret_val;
   
+  ret_val = tcp_write(host_pcb, message, len, 1);
+//   if (ret_val == ERR_OK)
+//   {
+//     HAL_GPIO_WritePin(GPIOE, GPIO_PIN_1, GPIO_PIN_SET); // orange led
+//   }
+//   else
+//   {
+//     HAL_GPIO_WritePin(GPIOE, GPIO_PIN_1, GPIO_PIN_SET);
+//   }
+    
 }
 
 /**
@@ -584,8 +595,9 @@ void telnet_recv_task (void *argument)
 {
   char carriage_return = 0x0D;
   
+  serial_to_tcp_stream_h = xStreamBufferCreate(100, 1);
+  
   // create receiver tasks
-  telnet_tx_task_handle = osThreadNew(telnet_tx_task, NULL, &telnet_tx_task_attributes);
   telnet_serial_recv_task_handle = osThreadNew(telnet_serial_recv_task, NULL, &telnet_serial_recv_task_attributes);
   
   // create semaphores
@@ -634,46 +646,10 @@ void tcp_pbuf_to_serial (struct pbuf* p)
 	for (int i = 0; i<tcp_data_size; i++){
 		tcp_data[i] = buff_ptr[i];}
 
-  // TODO replace se,aphore with a queue
 	xSemaphoreGiveFromISR(serial_send_release_semphr, &xHigherPriorityTaskWoken);
 	portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
 }
 
-/**
- * @brief Send the data obtained from the serial port via TCP connection
- * @note this task uses a queue to organize the messages that are captured from the UART ISR
- */
-void telnet_tx_task(void *argument)
-{
-  char test_buff[4] = {0};
-//   QueueHandle_t serial_to_pbuf_queue;
-//   serial_to_pbuf_queue = xQueueCreate( 10, sizeof(*char) );
-  send_tcp_pkt_semphr = xSemaphoreCreateBinary();
-  //TODO implement queue system
-  
-//   if(serial_to_pbuf_queue != NULL)
-//   {
-    for(;;)
-    {
-      xSemaphoreTake (send_tcp_pkt_semphr, portMAX_DELAY);
-      //telnet_send (serial_to_tcp_buff, serial_to_tcp_buff_size);
-      
-      test_buff[0] = serial_to_tcp_buff_size;
-      test_buff[1] = serial_to_tcp_buff[1];
-      test_buff[2] = serial_to_tcp_buff[2];
-    
-      test_buff[3] = serial_to_tcp_buff[serial_to_tcp_buff_size -1];
-      osDelay(1);
-    }
-//   }
-//   else
-//   {
-//     for(;;)
-//     {
-//       osDelay(1000);
-//     }
-//   }
-}
 
 /**
  * @brief
@@ -681,14 +657,35 @@ void telnet_tx_task(void *argument)
  */
 void telnet_serial_recv_task (void *argument)
 {
-  char_recv_semphr = xSemaphoreCreateBinary();
+  char serial_buff[1024] = {0}; // TCP accepts maximum of 1500 bytes in its payload
+  char single = {0};
+  uint16_t msg_size = 0;
+  
+  // create the stream buffer to receive characters from the ISR of UART
+  
+  if (serial_to_tcp_stream_h == NULL)
+  {
+	  while(1);
+  }
+  
+  memset( serial_buff, 0x00, sizeof( serial_buff ) );
+
+  // set UART to recv mode
+  HAL_UART_Receive_IT(&huart3, &single_character, 1);
   
   for (;;)
   {
-    // set UART receiver
-    HAL_UART_Receive_IT(&huart3, &single_character, 1);
-  
-    xSemaphoreTake (char_recv_semphr, portMAX_DELAY);
+    // stream returns single characters from the UART ISR
+    xStreamBufferReceive(serial_to_tcp_stream_h, (void *) &(single), sizeof(char), portMAX_DELAY);
+    serial_buff[msg_size] = single;
+    msg_size++;
+    
+    // check if received byte is the end of message of exceeds the tcp buff size
+    if ( (serial_buff[msg_size] == NULL)||(serial_buff[msg_size] == '\n')||(serial_buff[msg_size] == '\r')||(msg_size > (sizeof(serial_buff)-1)) )
+    {
+      //telnet_send(serial_buff, msg_size);
+      msg_size = 0;
+    }
   }
 }
 
@@ -698,48 +695,19 @@ void telnet_serial_recv_task (void *argument)
  */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *UartHandle)
 {
-	static BaseType_t xHigherPriorityTaskWoken;
-	static uint16_t msg_len = 0;
-	xHigherPriorityTaskWoken = pdFALSE;
+  static BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-  // check if interruption was called by the correct UART set for the telnet interface 
-  if (huart3.Instance == UartHandle->Instance)
-  {
-    // check the character received: if is a NULL or Cariage ret. send data to telnet tx queue (end of msg)
-    //                               if maximum size of the buffer is reached, send data to telnet tx queue
-    //                               in the other cases, store the received char on the buffer
-    if ((single_character == 0x00) || (single_character == 0x0d) || (serial_to_tcp_buff_size == 1023))  
-    {
-      serial_to_tcp_buff[msg_len] = single_character; // last character from the message
-      serial_to_tcp_buff_size = msg_len+1; // total message size
-      msg_len = 0; // reset buffer position
-      // queue send to back from ISR
-      xSemaphoreGiveFromISR(send_tcp_pkt_semphr, &xHigherPriorityTaskWoken);
-      portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
-    }
-    else
-    {
-      // store received char on the buffer
-      serial_to_tcp_buff[msg_len] = single_character;
-      // increment recv buffer position
-      msg_len++;
-    }
-    
-    // release the semaphore to reset UART recv
-    xSemaphoreGiveFromISR(char_recv_semphr, &xHigherPriorityTaskWoken);
-    portYIELD_FROM_ISR( xHigherPriorityTaskWoken );    
-  }
+  HAL_UART_Receive_IT(&huart3, &single_character, 1);
+
+  xStreamBufferSendFromISR( serial_to_tcp_stream_h, ( void * ) (&single_character), 1, &xHigherPriorityTaskWoken);
+  portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
+  
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *UartHandle)
 {
-  static BaseType_t xHigherPriorityTaskWoken;
-	xHigherPriorityTaskWoken = pdFALSE;
-  
-  // Error Handler
-  
-  xSemaphoreGiveFromISR(char_recv_semphr, &xHigherPriorityTaskWoken);
-  portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET); // red led
+  HAL_UART_Receive_IT(&huart3, &single_character, 1);
 }
 
 #endif /* LWIP_TCP */
