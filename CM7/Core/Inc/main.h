@@ -42,6 +42,7 @@ extern "C" {
 /* Exported constants --------------------------------------------------------*/
 /* USER CODE BEGIN EC */
 extern UART_HandleTypeDef huart3;
+extern TIM_HandleTypeDef htim2;
 /* USER CODE END EC */
 
 /* Exported macro ------------------------------------------------------------*/

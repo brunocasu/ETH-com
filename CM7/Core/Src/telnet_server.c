@@ -102,12 +102,6 @@ const osThreadAttr_t telnet_serial_recv_task_attributes = {
 /**** semaphore to enable the serial transmission if received data from the TCP connection ****/
 static SemaphoreHandle_t serial_send_release_semphr = NULL;
 
-/**** semaphore used in the ISR of the serial port to inform character reception ****/
-static SemaphoreHandle_t char_recv_semphr = NULL;
-
-static SemaphoreHandle_t send_tcp_pkt_semphr  = NULL;
-
-void telnet_tx_task(void *argument);
 void telnet_serial_recv_task (void *argument);
 
 /**** function to clear the buffers for a new pkt reception ****/
@@ -122,10 +116,8 @@ uint16_t tcp_data_size = 0;
 
 /**** serial to tcp ****/
 char single_character;
+char character_buff[1024] = {0};
 uint16_t serial_msg_size = 0;
-static StreamBufferHandle_t serial_to_tcp_stream_h = NULL;
-#define STREAM_BUFF_LENGTH_BYTES  ((size_t) 100)
-#define STREAM_BUFF_TRIGG_LEVEL   ((BaseType_t) 1)
 
 
 /**
@@ -595,7 +587,7 @@ void telnet_recv_task (void *argument)
 {
   char carriage_return = 0x0D;
   
-  serial_to_tcp_stream_h = xStreamBufferCreate(100, 1);
+  //serial_to_tcp_stream_h = xStreamBufferCreate(100, 1);
   
   // create receiver tasks
   telnet_serial_recv_task_handle = osThreadNew(telnet_serial_recv_task, NULL, &telnet_serial_recv_task_attributes);
@@ -657,36 +649,40 @@ void tcp_pbuf_to_serial (struct pbuf* p)
  */
 void telnet_serial_recv_task (void *argument)
 {
-  char serial_buff[1024] = {0}; // TCP accepts maximum of 1500 bytes in its payload
-  char single = {0};
-  uint16_t msg_size = 0;
-  
-  // create the stream buffer to receive characters from the ISR of UART
-  
-  if (serial_to_tcp_stream_h == NULL)
-  {
-	  while(1);
-  }
-  
-  memset( serial_buff, 0x00, sizeof( serial_buff ) );
+//   char serial_buff[1024] = {0}; // TCP accepts maximum of 1500 bytes in its payload
+//   char single = {0};
+//   uint16_t msg_size = 0;
+//   
+//   // create the stream buffer to receive characters from the ISR of UART
+//   
+//   if (serial_to_tcp_stream_h == NULL)
+//   {
+// 	  while(1);
+//   }
+//   
+//   memset( serial_buff, 0x00, sizeof( serial_buff ) );
 
   // set UART to recv mode
-  HAL_UART_Receive_IT(&huart3, &single_character, 1);
+	HAL_UART_Receive_IT(&huart3, &single_character, 1);
+  
+  HAL_TIM_Base_Start_IT(&htim2);
   
   for (;;)
   {
-    // stream returns single characters from the UART ISR
-    xStreamBufferReceive(serial_to_tcp_stream_h, (void *) &(single), sizeof(char), portMAX_DELAY);
-    serial_buff[msg_size] = single;
-    msg_size++;
-    
-    // check if received byte is the end of message of exceeds the tcp buff size
-    if ( (serial_buff[msg_size] == NULL)||(serial_buff[msg_size] == '\n')||(serial_buff[msg_size] == '\r')||(msg_size > (sizeof(serial_buff)-1)) )
-    {
-      //telnet_send(serial_buff, msg_size);
-      msg_size = 0;
-    }
-  }
+//     // stream returns single characters from the UART ISR
+//     xStreamBufferReceive(serial_to_tcp_stream_h, (void *) &(single), sizeof(char), portMAX_DELAY);
+//     serial_buff[msg_size] = single;
+//     msg_size++;
+//     
+//     // check if received byte is the end of message of exceeds the tcp buff size
+//     if ( (serial_buff[msg_size] == NULL)||(serial_buff[msg_size] == '\n')||(serial_buff[msg_size] == '\r')||(msg_size > (sizeof(serial_buff)-1)) )
+//     {
+//       //telnet_send(serial_buff, msg_size);
+//       msg_size = 0;
+//     }
+    HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_14);
+    osDelay(1000);
+   }
 }
 
 /**
@@ -698,9 +694,12 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *UartHandle)
   static BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
   HAL_UART_Receive_IT(&huart3, &single_character, 1);
-
-  xStreamBufferSendFromISR( serial_to_tcp_stream_h, ( void * ) (&single_character), 1, &xHigherPriorityTaskWoken);
-  portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
+  
+  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_14); // red led
+  
+  //HAL_TIM_Base_Start_IT(&htim2);
+//   xStreamBufferSendFromISR( serial_to_tcp_stream_h, ( void * ) (&single_character), 1, &xHigherPriorityTaskWoken);
+//   portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
   
 }
 
@@ -710,4 +709,17 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *UartHandle)
   HAL_UART_Receive_IT(&huart3, &single_character, 1);
 }
 
+//WARNING Must enable USE_HAL_TIM_REGISTER_CALLBACKS from the file stm32h7xx_hal_conf.h to use specific callbacks
+//Timer Callback is called once every 2ms
+void Telnet_Timer_Callback(TIM_HandleTypeDef *htim)
+{
+  if(htim->Instance == TIM2)
+  {
+    serial_msg_size++;
+    if(serial_msg_size>500){
+      serial_msg_size=0;
+      HAL_GPIO_TogglePin(GPIOE, GPIO_PIN_1); // orange led
+    }
+  }
+}
 #endif /* LWIP_TCP */

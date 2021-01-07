@@ -40,6 +40,8 @@ void telnet_recv_task(void *argument);
 extern osThreadId_t telnet_recv_task_handle;
 extern const osThreadAttr_t telnet_recv_task_attributes;
 
+void Telnet_Timer_Callback(TIM_HandleTypeDef *htim);
+
 // user must include the telnet thread as the following:
 // telnet_recv_task_handle = osThreadNew(telnet_recv_task, NULL, &telnet_recv_task_attributes);
 

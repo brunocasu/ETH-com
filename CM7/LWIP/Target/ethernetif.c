@@ -6,7 +6,7 @@
   ******************************************************************************
   * @attention
   *
-  * <h2><center>&copy; Copyright (c) 2020 STMicroelectronics.
+  * <h2><center>&copy; Copyright (c) 2021 STMicroelectronics.
   * All rights reserved.</center></h2>
   *
   * This software component is licensed by ST under Ultimate Liberty license
@@ -749,13 +749,13 @@ void ethernet_link_thread(void* argument)
   uint32_t PHYLinkState;
   uint32_t linkchanged = 0, speed = 0, duplex =0;
 
+  struct netif *netif = (struct netif *) argument;
 /* USER CODE BEGIN ETH link init */
 
 /* USER CODE END ETH link init */
 
   for(;;)
   {
-  struct netif *netif = (struct netif *) argument;
   PHYLinkState = LAN8742_GetLinkState(&LAN8742);
 
   if(netif_is_link_up(netif) && (PHYLinkState <= LAN8742_STATUS_LINK_DOWN))
