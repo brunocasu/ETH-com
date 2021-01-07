@@ -603,6 +603,8 @@ void telnet_recv_task (void *argument)
   // create receiver task
   //telnet_serial_recv_task_handle = osThreadNew(telnet_serial_recv_task, NULL, &telnet_serial_recv_task_attributes);
   
+  HAL_TIM_Base_Start_IT(&htim2);
+  
   for(;;){osDelay(1000);}
   
   for(;;)
@@ -685,31 +687,22 @@ void telnet_serial_recv_task (void *argument)
  */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *UartHandle)
 {
+  // reset UART recv
   HAL_UART_Receive_IT(&huart3, &single_character, 1);
-  
-//   if (timer_on_flag == 0)
-//   {
-//     // if timer is off start the timer 
-//     HAL_TIM_Base_Start_IT(&htim2);
-//     timer_on_flag = 1;
-//   }
-  // reset timeout counter
-  next_char_timeout = 0;
   
   // store character received in UART
   serial_msg_buff[serial_msg_size] = single_character;
   serial_msg_size++;
   
+  next_char_timeout = 0;
+  
   // check if max size of the buffer is reached
-  if (serial_msg_size>=10)
+  if (serial_msg_size>=(sizeof(serial_msg_buff)-1))
   {
     // send TCP pkt
     telnet_send(serial_msg_buff, serial_msg_size);
     serial_msg_size = 0;
-    
-    //stop timer until new char received
-//     HAL_TIM_Base_Stop_IT(&htim2);
-//     timer_on_flag = 0 ;
+
   }
   
   HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_14); // red led
@@ -727,21 +720,18 @@ void Telnet_Timer_Callback(TIM_HandleTypeDef *htim)
 {
   if(htim->Instance == TIM2)
   {
-    next_char_timeout++;
-    
     //check if 20 ms timeout is reached
-    if((next_char_timeout>10) && (serial_msg_size>0))
+    if(serial_msg_size>0)
     {
-      next_char_timeout = 0;
+      next_char_timeout++;
       
-      //send TCP pkt
-      telnet_send(serial_msg_buff, serial_msg_size);
-      serial_msg_size = 0;
-      
-      //stop timer until new char received
-      HAL_TIM_Base_Stop_IT(&htim2);
-      timer_on_flag = 0 ;
-      
+      if(next_char_timeout>10)
+      {
+        //send TCP pkt
+        telnet_send(serial_msg_buff, serial_msg_size);
+        serial_msg_size = 0;
+        next_char_timeout = 0;
+      }
       HAL_GPIO_TogglePin(GPIOE, GPIO_PIN_1); // orange led debug
     }
   }
