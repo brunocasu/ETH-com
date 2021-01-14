@@ -240,7 +240,6 @@ int main(void)
   /* add threads, ... */
   udp_timer_message_task_handle = osThreadNew(udp_timer_message_task, NULL, &udp_timer_message_task_attributes);
   udp_echo_task_handle = osThreadNew(udp_echo_task, NULL, &udp_echo_task_attributes);
-  telnet_recv_task_handle = osThreadNew(telnet_recv_task, NULL, &telnet_recv_task_attributes);
   
   // Start LwIP
   MX_LWIP_Init();
@@ -377,7 +376,7 @@ static void MX_TIM2_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN TIM2_Init 2 */
-  HAL_TIM_RegisterCallback(&htim2, HAL_TIM_PERIOD_ELAPSED_CB_ID, Telnet_Timer_Callback);
+  
   /* USER CODE END TIM2_Init 2 */
 
 }
@@ -425,7 +424,7 @@ static void MX_USART3_UART_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN USART3_Init 2 */
-
+  
   /* USER CODE END USART3_Init 2 */
 
 }
@@ -598,7 +597,6 @@ void udp_echo_task(void *argument)
   }
 }
 
-
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -611,14 +609,19 @@ void udp_echo_task(void *argument)
 void StartDefaultTask(void *argument)
 {
   /* init code for LWIP */
-  //MX_LWIP_Init();
+  // MX_LWIP_Init();
+  
+  telnet_create (23, &huart3);
+  
+  telnet_create (24, &huart3);
+
+  //HAL_UART_Receive_IT(&huart3, &single_character, 1);
+  
   /* USER CODE BEGIN 5 */
   while(1)
   {
-	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
-	  osDelay(1000);
-	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-	  osDelay(80);
+	  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0); // green LED
+	  osDelay(200);
   }
   /* USER CODE END 5 */
 }
@@ -694,7 +697,7 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+  
   for(;;);
   /* USER CODE END Error_Handler_Debug */
 }

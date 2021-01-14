@@ -35,14 +35,17 @@
 #include "task.h"
 #include "semphr.h"
 
-/**** handler and function to create the telnet thread ****/
-void telnet_recv_task(void *argument);
-extern osThreadId_t telnet_recv_task_handle;
-extern const osThreadAttr_t telnet_recv_task_attributes;
+void telnet_create (uint16_t port, UART_HandleTypeDef* serial_handler);
 
+/**** timer callback ****/
 void Telnet_Timer_Callback(TIM_HandleTypeDef *htim);
 
-// user must include the telnet thread as the following:
-// telnet_recv_task_handle = osThreadNew(telnet_recv_task, NULL, &telnet_recv_task_attributes);
+/**** register the callback ****/
+// HAL_TIM_RegisterCallback(&user_handler, HAL_TIM_PERIOD_ELAPSED_CB_ID, Telnet_Timer_Callback);
+
+/**** serial callbacks ****/
+//WARNING must be matched with the creation sequence - callback0 for first connection, callback1 for second connction and so on
+//void Telnet_UART_RxCpltCallback(UART_HandleTypeDef *UartHandle);
+
 
 #endif /* __TCP_ECHOSERVER */
