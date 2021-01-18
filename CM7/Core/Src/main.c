@@ -575,14 +575,12 @@ void udp_echo_task(void *argument)
   pcb = udp_new();
   if (pcb==NULL)
   {
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
     while(1);
   }
   
   err_t bind_ret_val = udp_bind(pcb, IP_ADDR_ANY, 7777);
   if (bind_ret_val != ERR_OK)
   {
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
     while(1);
   }
   
@@ -611,13 +609,9 @@ void StartDefaultTask(void *argument)
   /* init code for LWIP */
   // MX_LWIP_Init();
   
-  telnet_create (23, &huart3);
-  
-  telnet_create (24, &huart3);
-
-  //HAL_UART_Receive_IT(&huart3, &single_character, 1);
-  
   /* USER CODE BEGIN 5 */
+  telnet_create (23, &huart3);
+  //telnet_create (24, &huart3);
   while(1)
   {
 	  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0); // green LED

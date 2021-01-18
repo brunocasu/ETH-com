@@ -27,6 +27,9 @@
  * This file is part of the lwIP TCP/IP stack.
  * 
  */
+
+/* Modified by Bruno Casu (2021 - SPRACE, São Paulo BR) */
+
 #ifndef __TELNET_H__
 #define __TELNET_H__
 #include "stm32h7xx_hal.h"
@@ -34,18 +37,11 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "semphr.h"
+#include "stream_buffer.h"
 
+// WARNING: User must set the interruption mode for the UART peripheral
+// WARNING: User must enable the creation of custom callbacks for the UART peripheral
+//			this is done at the file stm32h7xx_hal_conf.h altering the value of USE_HAL_TIM_REGISTER_CALLBACKS
 void telnet_create (uint16_t port, UART_HandleTypeDef* serial_handler);
-
-/**** timer callback ****/
-void Telnet_Timer_Callback(TIM_HandleTypeDef *htim);
-
-/**** register the callback ****/
-// HAL_TIM_RegisterCallback(&user_handler, HAL_TIM_PERIOD_ELAPSED_CB_ID, Telnet_Timer_Callback);
-
-/**** serial callbacks ****/
-//WARNING must be matched with the creation sequence - callback0 for first connection, callback1 for second connction and so on
-//void Telnet_UART_RxCpltCallback(UART_HandleTypeDef *UartHandle);
-
 
 #endif /* __TCP_ECHOSERVER */
