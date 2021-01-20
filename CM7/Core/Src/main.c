@@ -611,11 +611,17 @@ void StartDefaultTask(void *argument)
   
   /* USER CODE BEGIN 5 */
   telnet_create (23, &huart3);
+
+  telnet_create (24, &huart3);
+
+  telnet_create (25, &huart3);
+
+  telnet_create (26, &huart3);
   //telnet_create (24, &huart3);
   while(1)
   {
 	  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0); // green LED
-	  osDelay(200);
+	  osDelay(500);
   }
   /* USER CODE END 5 */
 }

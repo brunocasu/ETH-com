@@ -34,7 +34,8 @@
 
 /* This file was modified by ST */
 
-/* Modified by Bruno Casu (2021 - SPRACE, São Paulo BR) */
+/* Modified by Bruno Casu (Jan 2021 - SPRACE, São Paulo BR) */
+/* 1 TAB = 2 Spaces */
 
 #include "telnet_server.h"
 
@@ -58,7 +59,8 @@ enum tcp_states
   ES_CLOSING
 };
 
-// structure to maintain connection information to be passed as argument to LwIP callbacks
+// structure to maintain connection information
+// used as additional argument in LwIP callbacks
 struct tcp_mng_struct
 {
   uint8_t state;                        /* current connection state */
@@ -84,15 +86,13 @@ void tcp_pbuf_to_serial (struct pbuf* p, UART_HandleTypeDef* serial_handler);
 static struct tcp_pcb* telnet_pcb[MAX_NUM_TELNET_INST];
 static struct tcp_pcb* host_pcb[MAX_NUM_TELNET_INST];
 static uint16_t tcp_port[MAX_NUM_TELNET_INST] = {0};
+// global to store serial handlers for the instances
 static UART_HandleTypeDef* tcp_serial_handler[MAX_NUM_TELNET_INST];
+//  stream buffer array for the instances
+StreamBufferHandle_t serial_input_stream[MAX_NUM_TELNET_INST]; // stream buffer handler
 
 // serial to tcp variables
 char single_character; // store received char from UART
-StreamBufferHandle_t serial_input_stream; // stream buffer handler
-
-char serial_msg_buff[1024] = {0};
-uint16_t serial_msg_size = 0;
-int next_char_timeout = 0;
 
 // serial to tcp task handler and attributes
 osThreadId_t serial_to_tcp_TaskHandle;
@@ -106,9 +106,11 @@ void serial_to_tcp_Task (void *argument);
 // custom callback for UART recv
 void telnet_serial_RxCpltCallback(UART_HandleTypeDef *UartHandle);
 
+
+
 /**
- * @brief create a new instance of telnet connection in a defined port
- * @param port Number of the TCP connection Port
+ * @brief create a new instance of telnet connection in a defined TCP port connectred to a defined serial port (UART)
+ * @param port number of the TCP connection Port
  * @param serial_handler handler for the UART peripheral
  * @retval None
  *
@@ -119,6 +121,7 @@ void telnet_serial_RxCpltCallback(UART_HandleTypeDef *UartHandle);
 void telnet_create (uint16_t port, UART_HandleTypeDef* serial_handler)
 {
   static uint8_t telnet_instance = 0;
+  uint8_t *inst_for_task;
   
   // register the UART callback for the recv mode
   // HAL_TIM_RegisterCallback(&htim2, HAL_TIM_PERIOD_ELAPSED_CB_ID, Telnet_Timer_Callback);
@@ -128,19 +131,18 @@ void telnet_create (uint16_t port, UART_HandleTypeDef* serial_handler)
   if (telnet_instance < MAX_NUM_TELNET_INST)
   {
     // add the port of the TCP connection to the global array
-	tcp_port[telnet_instance] = port;
+    tcp_port[telnet_instance] = port;
 
     // add the handler of the serial peripheral to the global array
     tcp_serial_handler[telnet_instance] = serial_handler;
 
     // create new TCP connection for the given instance
     telnet_init(telnet_instance);
-
-    if(telnet_instance == 0)
-    {
-      // create serial recv task
-      serial_to_tcp_TaskHandle = osThreadNew(serial_to_tcp_Task, NULL, &serial_to_tcp_TaskAttributes);
-    }
+    
+    inst_for_task = pvPortMalloc(sizeof(char));
+    *inst_for_task = telnet_instance;
+    // create serial recv task - pass telnet instance to each new task created
+    serial_to_tcp_TaskHandle = osThreadNew(serial_to_tcp_Task, (void *)inst_for_task, &serial_to_tcp_TaskAttributes);
 
     // set counter for next instance
     telnet_instance++;
@@ -149,7 +151,7 @@ void telnet_create (uint16_t port, UART_HandleTypeDef* serial_handler)
 
 /**
   * @brief Initializes the tcp server
-  * @param telnet_inst Number of the telnet instance
+  * @param telnet_inst number of the telnet instance
   * @retval None
   */
 void telnet_init(uint8_t telnet_inst)
@@ -180,8 +182,8 @@ void telnet_init(uint8_t telnet_inst)
   }
   else
   {
-	  // fail to create new protocol control block
-	  while (1);
+    // fail to create new protocol control block
+    while (1);
   }
 }
 
@@ -191,6 +193,9 @@ void telnet_init(uint8_t telnet_inst)
   * @param  newpcb: pointer on tcp_pcb struct for the newly created tcp connection
   * @param  err: not used 
   * @retval err_t: error status
+  * 
+  * @note This callback is called upon the request for a TCP connection from the host. It will set reciver mode for the
+  *       the TCP server and will start the UART peripheral in reciver mode.
   */
 static err_t tcp_com_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
 {
@@ -269,6 +274,11 @@ static err_t tcp_com_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
   * @param  pbuf: pointer on the received pbuf
   * @param  err: error information regarding the reveived pbuf
   * @retval err_t: error code
+  * 
+  * @note As the TCP connection is accepted, this callback will be called upon the receiving of a TCP pkt.
+  *       It will identfy the instance of the telnet connection based on the TCP port that received the pkt.
+  *       After confirming the instance it will transmmit the data fro the TCP pkt using the defined serial port for 
+  *       its instance.
   */
 static err_t tcp_com_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
 {
@@ -391,38 +401,41 @@ static void tcp_com_error(void *arg, err_t err)
 
 /**
  * @brief clear tcp struct to enable new reception
+ * @param  tpcb: pointer on the tcp_pcb connection
+ * 
+ * @retval none
  *
  */
 static void tcp_recv_reset(struct tcp_pcb *tpcb, struct tcp_mng_struct *es)
 {
-	struct pbuf *ptr;
-
-    // get pointer on pbuf from es structure
-	ptr = es->p;
-
-	uint16_t plen;
-	uint8_t freed;
-
-	plen = ptr->len;
-
-	// continue with next pbuf in chain (if any)
-	es->p = ptr->next;
-
-	if(es->p != NULL)
-	{
-	  // increment reference count for es->p
-	  pbuf_ref(es->p);
+  struct pbuf *ptr;
+  
+  // get pointer on pbuf from es structure
+  ptr = es->p;
+  
+  uint16_t plen;
+  uint8_t freed;
+  
+  plen = ptr->len;
+  
+  // continue with next pbuf in chain (if any)
+  es->p = ptr->next;
+  
+  if(es->p != NULL)
+  {
+    // increment reference count for es->p
+    pbuf_ref(es->p);
   }
-
-	// chop first pbuf from chain
-	do
-	{
-	  // try hard to free pbuf
-	  freed = pbuf_free(ptr);
-	}
-	while(freed == 0);
-	// we can read more data now
-	tcp_recved(tpcb, plen);
+  
+  // chop first pbuf from chain
+  do
+  {
+    // try hard to free pbuf
+    freed = pbuf_free(ptr);
+  }
+  while(freed == 0);
+  // we can read more data now
+  tcp_recved(tpcb, plen);
 }
 
 
@@ -461,31 +474,35 @@ static void tcp_com_connection_close(struct tcp_pcb *tpcb, struct tcp_mng_struct
  */
 void tcp_pbuf_to_serial (struct pbuf* p, UART_HandleTypeDef* serial_handler)
 {
-	char* buff_ptr;
-	char* tcp_data;
-	uint16_t tcp_data_size = 0;
-
-	tcp_data_size = p->len;
-
-	if (tcp_data_size > 0)
-	{
-	  tcp_data = pvPortMalloc(tcp_data_size);
-	  buff_ptr = (char*)p->payload;
-	
-	  for (int i = 0; i<tcp_data_size; i++){
-		tcp_data[i] = buff_ptr[i];}
-		  
-      // send TCP data to UART
-      for (int k = 0; k < tcp_data_size; k++){
-	    HAL_UART_Transmit(serial_handler, &tcp_data[k], 1, 1000);}
-
-	  // send carriage return byte - REMOVE IN FINAL IMPLEMENTATION
-      HAL_UART_Transmit(serial_handler, 0x0D, 1, 1000);
-	    
-      // clear the buffer for next transmission
-      vPortFree(tcp_data);
-      tcp_data_size = 0;
+  char* buff_ptr;
+  char* tcp_data;
+  uint16_t tcp_data_size = 0;
+  
+  tcp_data_size = p->len;
+  
+  if (tcp_data_size > 0)
+  {
+    tcp_data = pvPortMalloc(tcp_data_size);
+    buff_ptr = (char*)p->payload;
+  
+    for (int i = 0; i<tcp_data_size; i++)
+    {
+      tcp_data[i] = buff_ptr[i]; // copy data from buff
     }
+
+    // send TCP data to UART
+    for (int k = 0; k < tcp_data_size; k++)
+    {
+      HAL_UART_Transmit(serial_handler, &tcp_data[k], 1, 1000);
+    }
+  
+    // send carriage return byte - REMOVE IN FINAL IMPLEMENTATION
+    HAL_UART_Transmit(serial_handler, 0x0D, 1, 1000);
+    
+    // clear the buffer for next transmission
+    vPortFree(tcp_data);
+    tcp_data_size = 0;
+  }
 }
 
 
@@ -496,40 +513,83 @@ void tcp_pbuf_to_serial (struct pbuf* p, UART_HandleTypeDef* serial_handler)
 void serial_to_tcp_Task (void *argument)
 {
   char c;
+  const TickType_t xBlockTime = pdMS_TO_TICKS( 20 ); // timeout to send the tcp message
+  size_t xReceivedBytes; // control length to identify end of msg
+  static char serial_to_tcp_buff[1024]={0};
+  static uint16_t msg_size = 0;
+  int recv_ctr = 0;
+  uint8_t *ti;
+  
+  ti = (uint8_t *)argument;
+  uint8_t inst = *ti;
 
   // create the stream buffer
-  serial_input_stream = xStreamBufferCreate(10, 1);
+  serial_input_stream[inst] = xStreamBufferCreate(100, 1);
 
   for(;;)
   {
-	  xStreamBufferReceive(serial_input_stream, &c, 1, portMAX_DELAY);
-
-	  if (c == 'g')
-	  {
-		  HAL_GPIO_TogglePin(GPIOE, GPIO_PIN_1); // orange led debug
-	  }
-
+    if (recv_ctr == 0) // start receiver without a timeout value: waiting for a new message
+    {
+      xReceivedBytes = xStreamBufferReceive(serial_input_stream[inst], &c, 1, portMAX_DELAY);
+      recv_ctr = 1;
+    }
+    else if (recv_ctr == 1) // after receiving the first character, the buffer reading has a timeout
+    {
+      xReceivedBytes = xStreamBufferReceive(serial_input_stream[inst], &c, 1, xBlockTime); // return zero if timeout occours: no data in the buffer
+    }                                                                                                                       
+    
+    // add received char to buff (if any), increment msg size counter
+    if (xReceivedBytes > 0)
+    {
+      serial_to_tcp_buff[msg_size] = c;
+      msg_size++;
+    }
+    
+    // check for the end of the msg: no chars received in the timoeut period or buff max size reached
+    if ( (xReceivedBytes == 0) || (msg_size >= (sizeof(serial_to_tcp_buff) -1)) )
+    {
+      tcp_write(host_pcb[inst], serial_to_tcp_buff, msg_size, 1);
+      // reset msg size and return to receiver without timeout
+      msg_size = 0;
+      recv_ctr = 0;
+    }
   }
-
 }
 
 /**
- * @brief set callback function for the interrupt handler of UART
+ * @brief Callback function for the interrupt handler of all UART peripherals set for the telnet instances
  * 
  */
 void telnet_serial_RxCpltCallback(UART_HandleTypeDef *UartHandle)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-
-  xStreamBufferSendFromISR(serial_input_stream, &single_character, 1, &xHigherPriorityTaskWoken);
-
+  int inst_located = 0;
+  uint8_t inst = 0;
+  
   // reset UART recv
   HAL_UART_Receive_IT(UartHandle, &single_character, 1);
-
-  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_14); // red led debug
+  
+  // find the correct instance for this connection
+  while (inst_located == 0)
+  {
+    // match the UART instance that triggered the interrupt with the UART used in the telnet connection
+    if((UartHandle->Instance == tcp_serial_handler[inst]->Instance) && (inst < MAX_NUM_TELNET_INST))
+    {
+      inst_located = 1;
+    }
+    // increment instance value
+    inst++;
+    
+    // if received UART does not match with any instance exit loop
+    if(inst >= MAX_NUM_TELNET_INST)
+    	inst_located = 2;
+  }
+  inst--; // fix addition from the loop
+  
+  // send received char to stream buff of the located instance
+  if(inst_located == 1)
+    xStreamBufferSendFromISR(serial_input_stream[inst], &single_character, 1, &xHigherPriorityTaskWoken);
 }
-
-
 
 //WARNING Must enable USE_HAL_TIM_REGISTER_CALLBACKS from the file stm32h7xx_hal_conf.h to use specific callbacks
 //Timer Callback is called once every 2ms
