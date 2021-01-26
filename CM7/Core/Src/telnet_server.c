@@ -48,8 +48,14 @@
 
 #if LWIP_TCP
 
-// maximum number of telnet connections
+// maximum number of simultaneous telnet connections allowed
 #define MAX_NUM_TELNET_INST   4
+
+// instance control defines
+#define INSTANCE_NOT_FOUND    0
+#define INSTANCE_FOUND        1
+#define INSTANCE_NOT_LISTED   2
+
 
 enum tcp_states
 {
@@ -59,28 +65,27 @@ enum tcp_states
   ES_CLOSING
 };
 
-// structure to maintain connection information
-// used as additional argument in LwIP callbacks
+// structure to maintain connection information, used as additional argument in LwIP callbacks
 struct tcp_mng_struct
 {
   uint8_t state;                        /* current connection state */
-  uint8_t retries;
   struct tcp_pcb *pcb;                  /* pointer on the current tcp_pcb */
   uint8_t telnet_instance;              /* telnet instance identifier */
   UART_HandleTypeDef* serial_handler;   /* handler of the UART peripheral */
   struct pbuf *p;                       /* pointer on the received/to be transmitted pbuf */
 };
 
-// functions based in the tcp echosever example
+// functions created for the telnet implementation
 void telnet_init(uint8_t telnet_inst);
+static void tcp_recv_reset(struct tcp_pcb *tpcb, struct tcp_mng_struct *es);
+void tcp_pbuf_to_serial (struct pbuf* p, UART_HandleTypeDef* serial_handler);
+void telnet_error_handler (uint8_t instance);
+
+// functions based in the TCP echosever example
 static err_t tcp_com_accept(void *arg, struct tcp_pcb *newpcb, err_t err);
 static err_t tcp_com_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err);
 static void tcp_com_error(void *arg, err_t err);
 static void tcp_com_connection_close(struct tcp_pcb *tpcb, struct tcp_mng_struct *es);
-
-// functions created for the telnet connection
-static void tcp_recv_reset(struct tcp_pcb *tpcb, struct tcp_mng_struct *es);
-void tcp_pbuf_to_serial (struct pbuf* p, UART_HandleTypeDef* serial_handler);
 
 // globals to store TCP data for the different instances
 static struct tcp_pcb* telnet_pcb[MAX_NUM_TELNET_INST];
@@ -88,43 +93,41 @@ static struct tcp_pcb* host_pcb[MAX_NUM_TELNET_INST];
 static uint16_t tcp_port[MAX_NUM_TELNET_INST] = {0};
 // global to store serial handlers for the instances
 static UART_HandleTypeDef* tcp_serial_handler[MAX_NUM_TELNET_INST];
-//  stream buffer array for the instances
+// stream buffer array for the instances
 StreamBufferHandle_t serial_input_stream[MAX_NUM_TELNET_INST]; // stream buffer handler
 
-// serial to tcp variables
+// serial to TCP variables
 char single_character; // store received char from UART
 
-// serial to tcp task handler and attributes
+// serial to TCP task handler and attributes
 osThreadId_t serial_to_tcp_TaskHandle;
 const osThreadAttr_t serial_to_tcp_TaskAttributes = {
   .name = "serial to tcp",
   .priority = (osPriority_t) osPriorityNormal,
   .stack_size = 128 * 8
 };
-// serial to tcp task function
+// serial to TCP task function
 void serial_to_tcp_Task (void *argument);
 // custom callback for UART recv
 void telnet_serial_RxCpltCallback(UART_HandleTypeDef *UartHandle);
 
 
-
 /**
- * @brief create a new instance of telnet connection in a defined TCP port connectred to a defined serial port (UART)
+ * @brief create a new instance of telnet connection in a defined TCP port connected to a defined serial port (UART)
  * @param port number of the TCP connection Port
- * @param serial_handler handler for the UART peripheral
+ * @param serial_handler STM32_HAL: handler for the UART peripheral
  * @retval None
  *
  * @note This function can be called multiple times on the program.
- * 		 For each call a new telnet instance will be created and its parameters
- * 		 will be stored in the global arrays accordingly
+ * 		   For each call a new telnet instance will be created and its parameters
+ * 		   will be stored in the global arrays accordingly
  */
 void telnet_create (uint16_t port, UART_HandleTypeDef* serial_handler)
 {
   static uint8_t telnet_instance = 0;
   uint8_t *inst_for_task;
   
-  // register the UART callback for the recv mode
-  // HAL_TIM_RegisterCallback(&htim2, HAL_TIM_PERIOD_ELAPSED_CB_ID, Telnet_Timer_Callback);
+  // register the Custom UART callback for the recv mode
   HAL_UART_RegisterCallback(serial_handler, HAL_UART_RX_COMPLETE_CB_ID, telnet_serial_RxCpltCallback);
 
   // check if new instance reaches the maximum
@@ -136,12 +139,12 @@ void telnet_create (uint16_t port, UART_HandleTypeDef* serial_handler)
     // add the handler of the serial peripheral to the global array
     tcp_serial_handler[telnet_instance] = serial_handler;
 
-    // create new TCP connection for the given instance
+    // initialize new TCP connection for the given instance
     telnet_init(telnet_instance);
     
     inst_for_task = pvPortMalloc(sizeof(char));
     *inst_for_task = telnet_instance;
-    // create serial recv task - pass telnet instance to each new task created
+    // create the serial recv task for this instance - pass telnet instance to each new task created
     serial_to_tcp_TaskHandle = osThreadNew(serial_to_tcp_Task, (void *)inst_for_task, &serial_to_tcp_TaskAttributes);
 
     // set counter for next instance
@@ -149,26 +152,27 @@ void telnet_create (uint16_t port, UART_HandleTypeDef* serial_handler)
   }
 }
 
+
 /**
-  * @brief Initializes the tcp server
+  * @brief Initializes the TCP server
   * @param telnet_inst number of the telnet instance
   * @retval None
   */
 void telnet_init(uint8_t telnet_inst)
 {
-  // create new tcp protocol control block for the given instance
+  err_t err;
+  
+  // create new TCP protocol control block for the given instance - store the pcb in the global array
   telnet_pcb[telnet_inst] = tcp_new();
   
   if (telnet_pcb[telnet_inst] != NULL)
   {
-    err_t err;
-    
-    // bind to defined port
+    // bind the TCP connection to defined port
     err = tcp_bind(telnet_pcb[telnet_inst], IP_ADDR_ANY, tcp_port[telnet_inst]);
     
     if (err == ERR_OK)
     {
-      // start tcp listening
+      // start TCP listening
       telnet_pcb[telnet_inst] = tcp_listen(telnet_pcb[telnet_inst]);
       
       // set tcp_accept callback function
@@ -176,26 +180,27 @@ void telnet_init(uint8_t telnet_inst)
     }
     else 
     {
-      // deallocate the pcb if binding failed
+      // free the pcb if binding failed
       memp_free(MEMP_TCP_PCB, telnet_pcb[telnet_inst]);
     }
   }
   else
   {
     // fail to create new protocol control block
-    while (1);
+    telnet_error_handler (telnet_inst);
   }
 }
+
 
 /**
   * @brief  This function is the implementation of tcp_accept LwIP callback
   * @param  arg: not used
-  * @param  newpcb: pointer on tcp_pcb struct for the newly created tcp connection
+  * @param  newpcb: pointer on tcp_pcb struct for the newly created TCP connection
   * @param  err: not used 
   * @retval err_t: error status
   * 
-  * @note This callback is called upon the request for a TCP connection from the host. It will set reciver mode for the
-  *       the TCP server and will start the UART peripheral in reciver mode.
+  * @note This callback is called upon a request from the remote host. It will set receiver mode for
+  *       the TCP server and also for the UART peripheral of the defined instance.
   */
 static err_t tcp_com_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
 {
@@ -208,12 +213,12 @@ static err_t tcp_com_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
   LWIP_UNUSED_ARG(err);
 
   // find the correct instance for this connection
-  while (inst_located == 0)
+  while (inst_located == INSTANCE_NOT_FOUND)
   {
     // match the received connection port with the telnet instance port
     if((newpcb->local_port == tcp_port[inst]) && (inst < MAX_NUM_TELNET_INST))
     {
-      inst_located = 1;
+      inst_located = INSTANCE_FOUND;
     }
     // increment instance value
     inst++;
@@ -224,21 +229,20 @@ static err_t tcp_com_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
   }
   inst--; // fix addition from the loop
 
-  // set priority for the newly accepted tcp connection newpcb
+  // set priority for the newly accepted TCP connection newpcb
   tcp_setprio(newpcb, TCP_PRIO_MIN);
   
-  // save pcb data for transmission tp the connect host
+  // save pcb data for transmission
   host_pcb[inst] = (struct tcp_pcb *)newpcb;
 
-  // allocate structure es to maintain tcp connection informations
+  // allocate the TCP control structure to maintain connection informations
   es = (struct tcp_mng_struct *)mem_malloc(sizeof(struct tcp_mng_struct));
   if (es != NULL)
   {
-    es->state = ES_ACCEPTED; // update tcp state
-    es->pcb = newpcb; // save connection information
+    es->state = ES_ACCEPTED; // update TCP state
+    es->pcb = newpcb; // save connection pcb
     es->telnet_instance = inst; // save connection instance
     es->serial_handler = tcp_serial_handler[inst]; // save serial handler of this instance
-    es->retries = 0;
     es->p = NULL;
     
     // pass newly allocated es structure as argument to newpcb
@@ -257,7 +261,7 @@ static err_t tcp_com_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
   }
   else
   {
-    // close tcp connection
+    // close TCP connection
     tcp_com_connection_close(newpcb, es);
 
     // return memory error
@@ -269,16 +273,15 @@ static err_t tcp_com_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
 
 /**
   * @brief  This function is the implementation for tcp_recv LwIP callback
-  * @param  arg: pointer on a argument for the tcp_pcb connection
+  * @param  arg: pointer on a argument for the tcp_pcb connection - used for the TCP control struct
   * @param  tpcb: pointer on the tcp_pcb connection
   * @param  pbuf: pointer on the received pbuf
-  * @param  err: error information regarding the reveived pbuf
+  * @param  err: error information regarding the revceived pbuf
   * @retval err_t: error code
   * 
   * @note As the TCP connection is accepted, this callback will be called upon the receiving of a TCP pkt.
   *       It will identfy the instance of the telnet connection based on the TCP port that received the pkt.
-  *       After confirming the instance it will transmmit the data fro the TCP pkt using the defined serial port for 
-  *       its instance.
+  *       After confirming the instance it will transmit the data obtained from the TCP pkt using the defined serial port.
   */
 static err_t tcp_com_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
 {
@@ -352,7 +355,7 @@ static err_t tcp_com_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t
     {
       struct pbuf *ptr;
 
-      // chain pbufs to the end of what we recv'ed previously
+      // chain pbufs to the end of what we received previously
       ptr = es->p;
       pbuf_chain(ptr,p);
 
@@ -378,6 +381,7 @@ static err_t tcp_com_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t
   return ret_err;
 }
 
+
 /**
   * @brief  This function implements the tcp_err callback function (called
   *         when a fatal tcp_connection error occurs. 
@@ -399,10 +403,11 @@ static void tcp_com_error(void *arg, err_t err)
   }
 }
 
+
 /**
- * @brief clear tcp struct to enable new reception
- * @param  tpcb: pointer on the tcp_pcb connection
- * 
+ * @brief Clear tcp struct to enable new reception
+ * @param tpcb: pointer on the tcp_pcb connection
+ * @param es: TCP control struct
  * @retval none
  *
  */
@@ -468,7 +473,8 @@ static void tcp_com_connection_close(struct tcp_pcb *tpcb, struct tcp_mng_struct
 /**
  * @brief Send the received packet data (TCP) via serial port (UART)
  * @param p TCP packet information struct
- * @param serial_handler peripheral information struct used to send the data
+ * @param serial_handler STM32_HAL: handler for the UART peripheral
+ * @retval None
  * 
  * @note this function is called at the callback set in the tcp_recv() function
  */
@@ -496,8 +502,8 @@ void tcp_pbuf_to_serial (struct pbuf* p, UART_HandleTypeDef* serial_handler)
       HAL_UART_Transmit(serial_handler, &tcp_data[k], 1, 1000);
     }
   
-    // send carriage return byte - REMOVE IN FINAL IMPLEMENTATION
-    HAL_UART_Transmit(serial_handler, 0x0D, 1, 1000);
+    // send carriage return byte
+    // HAL_UART_Transmit(serial_handler, 0x0D, 1, 1000);
     
     // clear the buffer for next transmission
     vPortFree(tcp_data);
@@ -507,15 +513,17 @@ void tcp_pbuf_to_serial (struct pbuf* p, UART_HandleTypeDef* serial_handler)
 
 
 /**
- *
+ * @brief Telnet task to transmit data from the serial port to the TCP host connected
+ * @param argument: used to identify the telnet instance for the multiple tasks created
+ * @retval None
  *
  */
 void serial_to_tcp_Task (void *argument)
 {
   char c;
   const TickType_t xBlockTime = pdMS_TO_TICKS( 20 ); // timeout to send the tcp message
-  size_t xReceivedBytes; // control length to identify end of msg
-  static char serial_to_tcp_buff[1024]={0};
+  size_t xReceivedBytes; // control to identify end of msg
+  static char serial_to_tcp_buff[512] = {0};
   static uint16_t msg_size = 0;
   int recv_ctr = 0;
   uint8_t *ti;
@@ -523,12 +531,12 @@ void serial_to_tcp_Task (void *argument)
   ti = (uint8_t *)argument;
   uint8_t inst = *ti;
 
-  // create the stream buffer
+  // create the stream buffer to receive single character from the ISR (UART custom callback)
   serial_input_stream[inst] = xStreamBufferCreate(100, 1);
 
   for(;;)
   {
-    if (recv_ctr == 0) // start receiver without a timeout value: waiting for a new message
+    if (recv_ctr == 0) // start receiver without a timeout value: waiting for a new char from the serial
     {
       xReceivedBytes = xStreamBufferReceive(serial_input_stream[inst], &c, 1, portMAX_DELAY);
       recv_ctr = 1;
@@ -548,7 +556,10 @@ void serial_to_tcp_Task (void *argument)
     // check for the end of the msg: no chars received in the timoeut period or buff max size reached
     if ( (xReceivedBytes == 0) || (msg_size >= (sizeof(serial_to_tcp_buff) -1)) )
     {
-      tcp_write(host_pcb[inst], serial_to_tcp_buff, msg_size, 1);
+      // enqueue data for transmission - max size of TCP data sent is 512 Bytes
+      tcp_write(host_pcb[inst], serial_to_tcp_buff, msg_size, TCP_WRITE_FLAG_COPY);
+      // output the TCP data
+      tcp_output(host_pcb[inst]);
       // reset msg size and return to receiver without timeout
       msg_size = 0;
       recv_ctr = 0;
@@ -557,61 +568,61 @@ void serial_to_tcp_Task (void *argument)
 }
 
 /**
- * @brief Callback function for the interrupt handler of all UART peripherals set for the telnet instances
+ * @brief Custom callback function for the interrupt handler of all UART peripherals set for the telnet instances
+ * @param UartHandle: STM32_HAL: handler for the UART peripheral
+ * @retval None
+ * 
+ * @note This callback is called from the ISR triggered by a Character Receiving Complete (STM32_HAL defined)
  * 
  */
 void telnet_serial_RxCpltCallback(UART_HandleTypeDef *UartHandle)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-  int inst_located = 0;
+  int inst_located = INSTANCE_NOT_FOUND;
   uint8_t inst = 0;
   
   // reset UART recv
   HAL_UART_Receive_IT(UartHandle, &single_character, 1);
   
   // find the correct instance for this connection
-  while (inst_located == 0)
+  while (inst_located == INSTANCE_NOT_FOUND)
   {
     // match the UART instance that triggered the interrupt with the UART used in the telnet connection
     if((UartHandle->Instance == tcp_serial_handler[inst]->Instance) && (inst < MAX_NUM_TELNET_INST))
     {
-      inst_located = 1;
+      inst_located = INSTANCE_FOUND;
     }
     // increment instance value
     inst++;
     
     // if received UART does not match with any instance exit loop
     if(inst >= MAX_NUM_TELNET_INST)
-    	inst_located = 2;
+    	inst_located = INSTANCE_NOT_LISTED;
   }
   inst--; // fix addition from the loop
   
   // send received char to stream buff of the located instance
-  if(inst_located == 1)
+  if(inst_located == INSTANCE_FOUND)
+  {
     xStreamBufferSendFromISR(serial_input_stream[inst], &single_character, 1, &xHigherPriorityTaskWoken);
+  }
+  else if(inst_located == INSTANCE_NOT_LISTED)
+  {
+    telnet_error_handler (inst);
+  }
 }
 
-//WARNING Must enable USE_HAL_TIM_REGISTER_CALLBACKS from the file stm32h7xx_hal_conf.h to use specific callbacks
-//Timer Callback is called once every 2ms
-// void Telnet_Timer_Callback(TIM_HandleTypeDef *htim)
-// {
-//   if(htim->Instance == TIM2)
-//   {
-//     //check if 20 ms timeout is reached
-//     if(serial_msg_size>0)
-//     {
-//       next_char_timeout++;
-//       
-//       if(next_char_timeout>10)
-//       {
-//         //send TCP pkt
-//         tcp_write(host_pcb[0], serial_msg_buff, serial_msg_size, 1);
-//         serial_msg_size = 0;
-//         next_char_timeout = 0;
-//       }
-//       HAL_GPIO_TogglePin(GPIOE, GPIO_PIN_1); // orange led debug
-//       HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_14); // red led
-//     }
-//   }
-// }
+
+/**
+ * @brief Error handler function
+ * @param instance: telnet instance
+ * @retval None
+ * 
+ */
+void telnet_error_handler (uint8_t instance)
+{
+  while(1);
+}
+
+
 #endif /* LWIP_TCP */
