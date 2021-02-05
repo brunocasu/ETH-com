@@ -66,27 +66,6 @@ const osThreadAttr_t defaultTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
   .stack_size = 256 * 4
 };
-/* USER CODE BEGIN PV */
-osThreadId_t udp_timer_message_task_handle;
-const osThreadAttr_t udp_timer_message_task_attributes = {
-  .name = "UDP timer",
-  .priority = (osPriority_t) osPriorityNormal1,
-  .stack_size = 256 * 4
-};
-
-osThreadId_t udp_echo_task_handle;
-const osThreadAttr_t udp_echo_task_attributes = {
-  .name = "UDP echo",
-  .priority = (osPriority_t) osPriorityNormal1,
-  .stack_size = 256 * 4
-};
-
-// osThreadId_t telnet_server_task_handle;
-// const osThreadAttr_t telnet_server_task_attributes = {
-//   .name = "telnet server",
-//   .priority = (osPriority_t) osPriorityNormal1,
-//   .stack_size = 256 * 4
-// };
 
 /* USER CODE END PV */
 
@@ -100,21 +79,6 @@ static void MX_TIM2_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
-
-// Task Functions
-void udp_timer_message_task(void *argument);
-void udp_echo_task(void *argument);
-  
-static SemaphoreHandle_t udp_echo_semphr = NULL;
-// flags for LED behaivior
-
-// // semaphore to write the TCP data to UART
-// static SemaphoreHandle_t serial_send_release_semphr = NULL;
-// semaphore to write UART data to TCP stack_size
-
-// global variables to recover TCP data from ISR
-// char* tcp_data;
-// uint16_t tcp_data_size = 0;
 
 /* USER CODE END PFP */
 
@@ -219,8 +183,6 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
-  udp_echo_semphr = xSemaphoreCreateBinary();
-  //serial_send_release_semphr = xSemaphoreCreateBinary();
   
   /* USER CODE END RTOS_SEMAPHORES */
 
@@ -238,8 +200,6 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
-  udp_timer_message_task_handle = osThreadNew(udp_timer_message_task, NULL, &udp_timer_message_task_attributes);
-  udp_echo_task_handle = osThreadNew(udp_echo_task, NULL, &udp_echo_task_attributes);
   
   // Start LwIP
   MX_LWIP_Init();
@@ -484,116 +444,7 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-/**
- * @brief Sends UDP messages with an aproximate interval of 1s (the value of the timer is sent in the data)
- * @param none
- * @retval none
- */
-void udp_timer_message_task(void *argument)
-{
-  const char* begin_message = "Time of operation "; // hh:mm:ss
-  const char* end_message = " - UDP message sent from NUCLEO Board\n\r";
-  const char* separation = ":";
-  static int hour = 0;
-  char h_char[10] = {0};
-  static int minute = 0;
-  char m_char[4] = {0};
-  static int second = 0;
-  char s_char[4] = {0};
-  char *message;
-  message = pvPortMalloc( (strlen(begin_message)) + (strlen(end_message)) +20);
-  
-  ip_addr_t PC_IPADDR;
-  // Set IP addr for the target
-  IP_ADDR4(&PC_IPADDR, 192, 168, 1, 100);
-  // Create new UDP connection
-  struct udp_pcb* my_udp = udp_new();
-  udp_connect(my_udp, &PC_IPADDR, 55151); // Messages transmitted at PORT 55151
-  struct pbuf* udp_buffer = NULL;
-  
-  for (;;)
-  {
-    if (second < 59) {second++;}
-    else {second = 0; minute++;}
-	
-    if (minute == 60) {minute = 0; hour++;}
 
-    sprintf(h_char, "%02d", hour);
-    sprintf(m_char, "%02d", minute);
-    sprintf(s_char, "%02d", second);
-    // Assemble message to be transmitted
-    strcat(message, begin_message);
-    strcat(message, h_char);
-    strcat(message, separation);
-    strcat(message, m_char);
-    strcat(message, separation);
-    strcat(message, s_char);
-    strcat(message, end_message);    
-    
-    udp_buffer = pbuf_alloc(PBUF_TRANSPORT, strlen(message), PBUF_RAM);
-    if (udp_buffer != NULL)
-    {
-      memcpy(udp_buffer->payload, message, strlen(message));
-      udp_send(my_udp, udp_buffer);
-      pbuf_free(udp_buffer);
-
-    }
-    osDelay(999); // 0.999 seconds delay to compensate time to send the message
-    *message = '\0'; // clear the array for the next text addition
-  }
-}
-
-/**
- * @brief UDP callback function for Receiver Mode
- * 
- */
-static void udpecho_raw_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, struct ip_addr *addr, uint16_t port)
-{
-	static BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-	if (p != NULL)
-	{
-		// Echo msg
-		udp_sendto(pcb, p, addr, port);
-		// Free Data Pointer
-		pbuf_free(p);
-
-		xSemaphoreGiveFromISR(udp_echo_semphr, &xHigherPriorityTaskWoken);
-		portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
-	}
-}
-
-/**
- * @brief Create UDP Binding on any IP in Port 7777. Echoes all the messages sent in that port.
- * @param none
- * @retval none
- * 
- */
-void udp_echo_task(void *argument)
-{
-  struct udp_pcb * pcb;
-  
-  pcb = udp_new();
-  if (pcb==NULL)
-  {
-    while(1);
-  }
-  
-  err_t bind_ret_val = udp_bind(pcb, IP_ADDR_ANY, 7777);
-  if (bind_ret_val != ERR_OK)
-  {
-    while(1);
-  }
-  
-  // Set UDP receiver with a callback function
-  udp_recv(pcb, udpecho_raw_recv, pcb);
-  
-  for(;;)
-  {
-    xSemaphoreTake (udp_echo_semphr, portMAX_DELAY);
-    // Return form the ISR.
-    osDelay(1);
-  }
-}
 
 /* USER CODE END 4 */
 
@@ -606,24 +457,22 @@ void udp_echo_task(void *argument)
 /* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void *argument)
 {
+  /* USER CODE BEGIN DNO */
   /* init code for LWIP */
   // MX_LWIP_Init();
-  
   /* USER CODE BEGIN 5 */
-  telnet_create (23, &huart3);
+  telnet_create (23, &huart3); // standard for telnet is Port 23
+  telnet_create (24, &huart3); // extra connection used as an example (repeats serial periph)
 
-  telnet_create (24, &huart3);
+  udp_echo_create(7777);
 
-  telnet_create (25, &huart3);
-
-  telnet_create (26, &huart3);
-  //telnet_create (24, &huart3);
   while(1)
   {
-	  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0); // green LED
+	  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_0); // NUCLEO green LED
 	  osDelay(500);
   }
   /* USER CODE END 5 */
+  /* USER CODE BEGIN DNO */
 }
 
 /* MPU Configuration */

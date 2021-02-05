@@ -39,9 +39,19 @@
 #include "semphr.h"
 #include "stream_buffer.h"
 
+// To enable Hostname go to /LwIP/src/include/lwip/opt.h and change to 1 the value of LWIP_NETIF_HOSTNAME
+// To edit Hostname go to /LWIP/Target/ethernetif.c and search for LWIP_NETIF_HOSTNAME
+
+// LWIP stack control: /LWIP/Target/lwipopts.h
+
 // WARNING: User must set the interruption mode for the UART peripheral
 // WARNING: User must enable the creation of custom callbacks for the UART peripheral
-//			this is done at the file stm32h7xx_hal_conf.h altering the value of USE_HAL_TIM_REGISTER_CALLBACKS
+//			this is done at the file stm32h7xx_hal_conf.h altering the value of USE_HAL_UART_REGISTER_CALLBACKS to 1
+
+
 void telnet_create (uint16_t port, UART_HandleTypeDef* serial_handler);
 
-#endif /* __TCP_ECHOSERVER */
+// Extra application: UDP echo server
+void udp_echo_create(uint16_t port);
+
+#endif /* __TELNET_H__ */
