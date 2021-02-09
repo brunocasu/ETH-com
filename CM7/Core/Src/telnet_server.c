@@ -107,7 +107,7 @@ osThreadId_t serial_to_tcp_TaskHandle;
 const osThreadAttr_t serial_to_tcp_TaskAttributes = {
   .name = "serial to tcp",
   .priority = (osPriority_t) osPriorityNormal,
-  .stack_size = 256 * 16
+  .stack_size = 256 * 8
 };
 // serial to TCP task function
 void serial_to_tcp_Task (void *argument);
@@ -119,7 +119,7 @@ osThreadId_t tcp_to_serial_TaskHandle;
 const osThreadAttr_t tcp_to_serial_TaskAttributes = {
   .name = "tcp to serial",
   .priority = (osPriority_t) osPriorityNormal,
-  .stack_size = 256 * 16
+  .stack_size = 256 * 8
 };
 // TCP to serial task function
 void tcp_to_serial_Task (void *argument);
@@ -149,8 +149,8 @@ void telnet_create (uint16_t port, UART_HandleTypeDef* serial_handler)
 	inst_for_task = pvPortMalloc(sizeof(char));
 	*inst_for_task = telnet_instance;
 	// create the tasks for this instance - pass telnet instance to each new task created
-	serial_to_tcp_TaskHandle = osThreadNew(serial_to_tcp_Task, (void *)inst_for_task, &serial_to_tcp_TaskAttributes);
 	tcp_to_serial_TaskHandle = osThreadNew(tcp_to_serial_Task, (void *)inst_for_task, &tcp_to_serial_TaskAttributes);
+	serial_to_tcp_TaskHandle = osThreadNew(serial_to_tcp_Task, (void *)inst_for_task, &serial_to_tcp_TaskAttributes);
 
 	// add the port of the TCP connection to the global array
     tcp_port[telnet_instance] = port;
@@ -496,35 +496,27 @@ static void tcp_com_connection_close(struct tcp_pcb *tpcb, struct tcp_mng_struct
 static void tcp_pbuf_to_serial (struct pbuf* p, UART_HandleTypeDef* serial_handler, uint8_t telnet_instance)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-  //unsigned char* buff_ptr;
   unsigned char* tcp_data;
-  //uint16_t tcp_data_size = 0;
-  
-//  tcp_data_size = p->len;
   
   if (p->len > 0) // p->len is the received payload size
   {
-//    tcp_data = pvPortMalloc(tcp_data_size);
-    tcp_data = (char*)p->payload;
-  
-//    for (int i = 0; i<tcp_data_size; i++)
-//    {
-//      tcp_data[i] = buff_ptr[i]; // copy the TCP data
-//    }
+    tcp_data = (unsigned char*)p->payload;
 
+    HAL_UART_Transmit(tcp_serial_handler[telnet_instance], tcp_data, p->len, 100); // send character via serial
     // send the data to the TCP input stream buffer
-    for (int k = 0; k < p->len; k++)
-    {
-      xStreamBufferSendFromISR(tcp_input_stream[telnet_instance], &tcp_data[k], 1, &xHigherPriorityTaskWoken);
-    }
-
-    // clear the buffer for next transmission
-    // vPortFree(tcp_data);
-    // tcp_data_size = 0;
+    // for (int k = 0; k < p->len; k++)
+    // {
+      // xStreamBufferSendFromISR(tcp_input_stream[telnet_instance], &tcp_data[k], 1, &xHigherPriorityTaskWoken);
+    // }
   }
 }
 
-
+/**
+ * @brief Telnet task to transmit data from the TCP connection to the defined serial port
+ * @param argument used to identify the telnet instance for the multiple tasks created
+ * @retval None
+ *
+ */
 void tcp_to_serial_Task (void *argument)
 {
   unsigned char c;

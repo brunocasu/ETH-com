@@ -66,6 +66,7 @@ const osThreadAttr_t defaultTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
   .stack_size = 256 * 4
 };
+/* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
 
@@ -201,8 +202,6 @@ int main(void)
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   
-  // Start LwIP
-  MX_LWIP_Init();
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -457,9 +456,8 @@ static void MX_GPIO_Init(void)
 /* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void *argument)
 {
-  /* USER CODE BEGIN DNO */
   /* init code for LWIP */
-  // MX_LWIP_Init();
+  MX_LWIP_Init();
   /* USER CODE BEGIN 5 */
   telnet_create (23, &huart3); // standard for telnet is Port 23
   telnet_create (24, &huart3); // extra connection used as an example (repeats serial periph)
@@ -472,7 +470,6 @@ void StartDefaultTask(void *argument)
 	  osDelay(500);
   }
   /* USER CODE END 5 */
-  /* USER CODE BEGIN DNO */
 }
 
 /* MPU Configuration */
