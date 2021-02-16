@@ -1,0 +1,3 @@
+[submodule "CM7/Core/stm32h7xx_telnet_server"]
+	path = CM7/Core/stm32h7xx_telnet_server
+	url = git@github.com:brunocasu/stm32h7xx_telnet_server.git

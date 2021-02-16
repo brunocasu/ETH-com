@@ -28,7 +28,7 @@
 #include <lwip/debug.h>
 #include "lwip/tcp.h"
 #include <string.h>
-#include <telnet_server.h>
+#include "../stm32h7xx_telnet_server/telnet_server.h"
 
 #include "FreeRTOS.h"
 #include "task.h"
